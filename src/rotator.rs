@@ -1,6 +1,6 @@
 use crate::config::{RotationConfig, RotationStrategy};
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use flate2::write::GzEncoder;
 use flate2::Compression;
@@ -64,34 +64,65 @@ impl LogRotator {
         let ext = if self.config.compression { ".gz" } else { "" };
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
 
-        // 1. Remove the oldest backup
-        let oldest_numeric = format!("{}.{}{}", self.config.log_file_path, self.config.max_backups, ext);
-        if Path::new(&oldest_numeric).exists() {
-            fs::remove_file(oldest_numeric).await
-                .context("Failed to remove oldest backup file")?;
+        // 1. Identify existing backups to maintain the limit
+        let mut backups = self.list_backups().await?;
+        
+        // Sort backups by creation time (oldest first)
+        // Note: In a real production environment, we might use metadata or filename parsing
+        // Since we are using async, we'll collect metadata for sorting
+        let mut metadata_list = Vec::new();
+        for path in &backups {
+            if let Ok(meta) = fs::metadata(path).await {
+                if let Ok(created) = meta.created() {
+                    metadata_list.push((path, created));
+                }
+            }
         }
+        metadata_list.sort_by_key(|&(_, created)| created);
 
-        // 2. Shift existing backups: .1 -> .2, .2 -> .3, etc.
-        for i in (1..self.config.max_backups).rev() {
-            let current_numeric = format!("{}.{}{}", self.config.log_file_path, i, ext);
-            let next_numeric = format!("{}.{}{}", self.config.log_file_path, i + 1, ext);
-            if Path::new(&current_numeric).exists() {
-                fs::rename(current_numeric, next_numeric).await
-                    .context(format!("Failed to rotate backup {} to {}", i, i + 1))?;
+        // Remove oldest if we exceed the limit (including the one we are about to create)
+        let to_remove_count = backups.len().saturating_sub(self.config.max_backups - 1);
+        for i in 0..to_remove_count {
+            if let Some((path, _)) = metadata_list.get(i) {
+                fs::remove_file(path).await
+                    .context("Failed to remove oldest backup file")?;
             }
         }
 
-        // 3. Rotate current log to .1 with timestamp
-        let first_backup = format!("{}.1_{}{}", self.config.log_file_path, timestamp, ext);
+        // 2. Rotate current log to a new timestamped backup
+        let backup_name = format!("{}_{}{}", self.config.log_file_path, timestamp, ext);
 
         if self.config.compression {
-            self.compress_and_move(&self.config.log_file_path, &first_backup).await?
+            self.compress_and_move(&self.config.log_file_path, &backup_name).await?
         } else {
-            fs::rename(&self.config.log_file_path, first_backup).await
-                .context("Failed to rename log file to first backup")?;
+            fs::rename(&self.config.log_file_path, backup_name).await
+                .context("Failed to rename log file to backup")?;
         }
 
         Ok(())
+    }
+
+    async fn list_backups(&self) -> Result<Vec<PathBuf>> {
+        let path = Path::new(&self.config.log_file_path);
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let filename = path.file_name().context("Invalid log file path")?;
+        let filename_str = filename.to_string_lossy();
+        let ext = if self.config.compression { ".gz" } else { "" };
+
+        let mut backups = Vec::new();
+        let mut entries = fs::read_dir(parent).await
+            .context("Failed to read log directory")?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if let Some(name) = path.file_name() {
+                let name_str = name.to_string_lossy();
+                if name_str.starts_with(&filename_str) && name_str != filename_str && name_str.ends_with(ext) {
+                    backups.push(path);
+                }
+            }
+        }
+        Ok(backups)
     }
 
     async fn compress_and_move(&self, src: &str, dst: &str) -> Result<()> {
