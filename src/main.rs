@@ -4,7 +4,7 @@ mod rotator;
 use config::RotationConfig;
 use rotator::LogRotator;
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{interval, MissedTickBehavior};
 use std::env;
 use tokio::signal;
 
@@ -31,13 +31,16 @@ async fn main() -> anyhow::Result<()> {
         println!("Dry run mode enabled - no files will be modified");
     }
 
+    let mut check_interval = interval(Duration::from_secs(60));
+    check_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
     loop {
         tokio::select! {
             _ = signal::ctrl_c() => {
                 println!("Shutting down log rotator...");
                 break;
             }
-            _ = sleep(Duration::from_secs(60)) => {
+            _ = check_interval.tick() => {
                 match rotator.check_and_rotate().await {
                     Ok(true) => println!("Log rotated successfully at {}", chrono::Local::now()),
                     Ok(false) => {},
