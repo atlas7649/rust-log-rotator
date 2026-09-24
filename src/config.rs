@@ -1,4 +1,7 @@
 use serde::{Deserialize, Serialize};
+use std::path::Path;
+use tokio::fs;
+use anyhow::{Context, Result};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RotationConfig {
@@ -16,5 +19,15 @@ impl Default for RotationConfig {
             max_backups: 5,
             compression: false,
         }
+    }
+}
+
+impl RotationConfig {
+    pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let content = fs::read_to_string(path).await
+            .context("Failed to read configuration file")?;
+        let config = serde_json::from_str(&content)
+            .context("Failed to parse configuration JSON")?;
+        Ok(config)
     }
 }
