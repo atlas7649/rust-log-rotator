@@ -4,12 +4,19 @@ use tokio::fs;
 use anyhow::{Context, Result};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum RotationStrategy {
+    Size,
+    Daily,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RotationConfig {
     pub log_file_path: String,
     pub max_size_bytes: u64,
     pub max_backups: usize,
     pub compression: bool,
     pub dry_run: bool,
+    pub strategy: RotationStrategy,
 }
 
 impl Default for RotationConfig {
@@ -20,6 +27,7 @@ impl Default for RotationConfig {
             max_backups: 5,
             compression: false,
             dry_run: false,
+            strategy: RotationStrategy::Size,
         }
     }
 }
@@ -45,12 +53,13 @@ mod tests {
         let cfg = RotationConfig::default();
         assert_eq!(cfg.log_file_path, "app.log");
         assert_eq!(cfg.max_backups, 5);
+        assert_eq!(cfg.strategy, RotationStrategy::Size);
     }
 
     #[tokio::test]
     async fn test_load_config() -> Result<()> {
         let mut tmp_file = NamedTempFile::new()?;
-        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true}"#;
+        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true, "strategy": "Daily"}"#;
         tmp_file.write_all(json.as_bytes())?;
 
         let config = RotationConfig::load_from_file(tmp_file.path()).await?;
@@ -59,6 +68,7 @@ mod tests {
         assert_eq!(config.max_backups, 2);
         assert!(config.compression);
         assert!(config.dry_run);
+        assert_eq!(config.strategy, RotationStrategy::Daily);
         Ok(())
     }
 }

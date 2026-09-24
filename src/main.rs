@@ -23,10 +23,10 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let rotator = LogRotator::new(config.clone());
+    let mut rotator = LogRotator::new(config.clone());
 
     println!("Monitoring log file: {}", config.log_file_path);
-    println!("Max size: {} bytes", config.max_size_bytes);
+    println!("Strategy: {:?}", config.strategy);
     if config.dry_run {
         println!("Dry run mode enabled - no files will be modified");
     }
