@@ -64,34 +64,30 @@ impl LogRotator {
         let ext = if self.config.compression { ".gz" } else { "" };
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
 
-        // Remove the oldest backup if it exists
-        let oldest_path = format!("{}.{}_{}", self.config.log_file_path, self.config.max_backups, ext);
-        // Note: Since we add timestamps to .1, the shift logic for .n -> .n+1 
-        // needs to handle the timestamped filenames. For simplicity in this version,
-        // we will shift the numeric indices and the first one gets the timestamp.
-        
+        // 1. Remove the oldest backup
         let oldest_numeric = format!("{}.{}{}", self.config.log_file_path, self.config.max_backups, ext);
         if Path::new(&oldest_numeric).exists() {
             fs::remove_file(oldest_numeric).await
                 .context("Failed to remove oldest backup file")?;
         }
 
+        // 2. Shift existing backups: .1 -> .2, .2 -> .3, etc.
         for i in (1..self.config.max_backups).rev() {
-            let current = format!("{}.{}{}", self.config.log_file_path, i, ext);
-            let next = format!("{}.{}{}", self.config.log_file_path, i + 1, ext);
-
-            if Path::new(&current).exists() {
-                fs::rename(current, next).await
+            let current_numeric = format!("{}.{}{}", self.config.log_file_path, i, ext);
+            let next_numeric = format!("{}.{}{}", self.config.log_file_path, i + 1, ext);
+            if Path::new(&current_numeric).exists() {
+                fs::rename(current_numeric, next_numeric).await
                     .context(format!("Failed to rotate backup {} to {}", i, i + 1))?;
             }
         }
 
-        let first_backup_with_ts = format!("{}.1_{}{}", self.config.log_file_path, timestamp, ext);
+        // 3. Rotate current log to .1 with timestamp
+        let first_backup = format!("{}.1_{}{}", self.config.log_file_path, timestamp, ext);
 
         if self.config.compression {
-            self.compress_and_move(&self.config.log_file_path, &first_backup_with_ts).await?
+            self.compress_and_move(&self.config.log_file_path, &first_backup).await?
         } else {
-            fs::rename(&self.config.log_file_path, first_backup_with_ts).await
+            fs::rename(&self.config.log_file_path, first_backup).await
                 .context("Failed to rename log file to first backup")?;
         }
 
