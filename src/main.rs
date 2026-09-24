@@ -37,6 +37,12 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             _ = signal::ctrl_c() => {
+                println!("\nShutdown signal received. Performing final check...");
+                match rotator.check_and_rotate().await {
+                    Ok(true) => println!("Final rotation completed successfully"),
+                    Ok(false) => println!("No rotation needed during shutdown"),
+                    Err(e) => eprintln!("Error during final rotation check: {}", e),
+                }
                 println!("Shutting down log rotator...");
                 break;
             }
