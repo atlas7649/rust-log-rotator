@@ -68,8 +68,6 @@ impl LogRotator {
         let mut backups = self.list_backups().await?;
         
         // Sort backups by creation time (oldest first)
-        // Note: In a real production environment, we might use metadata or filename parsing
-        // Since we are using async, we'll collect metadata for sorting
         let mut metadata_list = Vec::new();
         for path in &backups {
             if let Ok(meta) = fs::metadata(path).await {
@@ -148,6 +146,107 @@ impl LogRotator {
 
         fs::remove_file(src_path).await
             .context("Failed to remove original log file after compression")?;
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{RotationConfig, RotationStrategy};
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_size_rotation_trigger() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("test.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+
+        // Create a log file smaller than max_size
+        fs::write(&log_path, "small content").await?;
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 100,
+            max_backups: 3,
+            compression: false,
+            dry_run: false,
+            strategy: RotationStrategy::Size,
+        };
+        let mut rotator = LogRotator::new(config);
+
+        // Should not rotate yet
+        assert!(!rotator.check_and_rotate().await?);
+
+        // Expand log file beyond max_size
+        let large_content = "a".repeat(101);
+        fs::write(&log_path, large_content).await?;
+
+        // Should rotate now
+        assert!(rotator.check_and_rotate().await?);
+        assert!(!log_path.exists());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backup_limit() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("limit.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 10,
+            max_backups: 2,
+            compression: false,
+            dry_run: false,
+            strategy: RotationStrategy::Size,
+        };
+        let mut rotator = LogRotator::new(config);
+
+        // Rotate 3 times
+        for _ in 0..3 {
+            fs::write(&log_path, "some content").await?;
+            rotator.check_and_rotate().await?;
+            // Brief sleep to ensure different timestamps
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+
+        let backups = rotator.list_backups().await?;
+        // We should only have 2 backups (max_backups = 2)
+        assert_eq!(backups.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_daily_rotation_trigger() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("daily.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+        fs::write(&log_path, "content").await?;
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 1024 * 1024,
+            max_backups: 3,
+            compression: false,
+            dry_run: false,
+            strategy: RotationStrategy::Daily,
+        };
+        let mut rotator = LogRotator::new(config);
+
+        // First check: sets last_rotation_date, doesn't rotate
+        assert!(!rotator.check_and_rotate().await?);
+
+        // Manually simulate date change
+        rotator.last_rotation_date = Some(chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+
+        // Now it should rotate because today != 2000-01-01
+        assert!(rotator.check_and_rotate().await?);
 
         Ok(())
     }
