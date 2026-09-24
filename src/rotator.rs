@@ -24,6 +24,10 @@ impl LogRotator {
 
         let metadata = fs::metadata(path).await?;
         if metadata.len() >= self.config.max_size_bytes {
+            if self.config.dry_run {
+                println!("[Dry Run] Log file {} exceeded size, would rotate", self.config.log_file_path);
+                return Ok(false);
+            }
             self.rotate().await?;
             return Ok(true);
         }

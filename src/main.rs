@@ -6,6 +6,7 @@ use rotator::LogRotator;
 use std::time::Duration;
 use tokio::time::sleep;
 use std::env;
+use tokio::signal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -26,13 +27,25 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Monitoring log file: {}", config.log_file_path);
     println!("Max size: {} bytes", config.max_size_bytes);
+    if config.dry_run {
+        println!("Dry run mode enabled - no files will be modified");
+    }
 
     loop {
-        match rotator.check_and_rotate().await {
-            Ok(true) => println!("Log rotated successfully at {}", chrono::Local::now()),
-            Ok(false) => {},
-            Err(e) => eprintln!("Error during rotation check: {}", e),
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                println!("Shutting down log rotator...");
+                break;
+            }
+            _ = sleep(Duration::from_secs(60)) => {
+                match rotator.check_and_rotate().await {
+                    Ok(true) => println!("Log rotated successfully at {}", chrono::Local::now()),
+                    Ok(false) => {},
+                    Err(e) => eprintln!("Error during rotation check: {}", e),
+                }
+            }
         }
-        sleep(Duration::from_secs(60)).await;
     }
+
+    Ok(())
 }

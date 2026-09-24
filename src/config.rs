@@ -9,6 +9,7 @@ pub struct RotationConfig {
     pub max_size_bytes: u64,
     pub max_backups: usize,
     pub compression: bool,
+    pub dry_run: bool,
 }
 
 impl Default for RotationConfig {
@@ -18,6 +19,7 @@ impl Default for RotationConfig {
             max_size_bytes: 10 * 1024 * 1024, // 10MB
             max_backups: 5,
             compression: false,
+            dry_run: false,
         }
     }
 }
