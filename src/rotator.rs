@@ -2,7 +2,6 @@ use crate::config::RotationConfig;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::fs;
-use chrono::Local;
 
 pub struct LogRotator {
     config: RotationConfig,
@@ -29,19 +28,27 @@ impl LogRotator {
     }
 
     async fn rotate(&self) -> Result<()> {
-        // Rotate old backups
+        // 1. Remove the oldest backup if it exists to make room
+        let oldest_path = format!("{}.{}", self.config.log_file_path, self.config.max_backups);
+        if Path::new(&oldest_path).exists() {
+            fs::remove_file(oldest_path).await
+                .context("Failed to remove oldest backup file")?;
+        }
+
+        // 2. Shift existing backups (max-1 -> max, ..., 1 -> 2)
         for i in (1..self.config.max_backups).rev() {
-            let old_path = format!("{}.{}", self.config.log_file_path, i);
-            let new_path = format!("{}.{}", self.config.log_file_path, i + 1);
-            if Path::new(&old_path).exists() {
-                fs::rename(old_path, new_path).await?;
+            let current_backup = format!("{}.{}", self.config.log_file_path, i);
+            let next_backup = format!("{}.{}", self.config.log_file_path, i + 1);
+            if Path::new(&current_backup).exists() {
+                fs::rename(current_backup, next_backup).await
+                    .context(format!("Failed to rotate backup {} to {}", i, i + 1))?;
             }
         }
 
-        // Move current log to .1
-        let backup_path = format!("{}.1", self.config.log_file_path);
-        fs::rename(&self.config.log_file_path, backup_path).await
-            .context("Failed to rename log file during rotation")?;
+        // 3. Move current log to .1
+        let first_backup = format!("{}.1", self.config.log_file_path);
+        fs::rename(&self.config.log_file_path, first_backup).await
+            .context("Failed to rename log file to first backup")?;
 
         Ok(())
     }
