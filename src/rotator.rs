@@ -68,17 +68,28 @@ impl LogRotator {
     }
 
     async fn compress_and_move(&self, src: &str, dst: &str) -> Result<()> {
-        let data = fs::read(src).await
-            .context("Failed to read log file for compression")?;
-        
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&data).context("Failed to write to gzip encoder")?;
-        let compressed_data = encoder.finish().context("Failed to finish gzip compression")?;
+        let src_path = Path::new(src);
+        let dst_path = Path::new(dst);
 
-        fs::write(dst, compressed_data).await
-            .context("Failed to write compressed log file to disk")?;
-        
-        fs::remove_file(src).await
+        // Use spawn_blocking for the synchronous compression part to avoid blocking the tokio executor
+        let src_path_owned = src_path.to_path_buf();
+        let dst_path_owned = dst_path.to_path_buf();
+
+        tokio::task::spawn_blocking(move || {
+            let mut input = std::fs::File::open(&src_path_owned)
+                .context("Failed to open log file for compression")?;
+            let output = std::fs::File::create(&dst_path_owned)
+                .context("Failed to create compressed log file")?;
+            
+            let mut encoder = GzEncoder::new(output, Compression::default());
+            std::io::copy(&mut input, &mut encoder)
+                .context("Failed to stream data to gzip encoder")?;
+            
+            encoder.finish().context("Failed to finish gzip compression")?;
+            Ok::<(), anyhow::Error>(())
+        }).await.context("Join error during compression")?;
+
+        fs::remove_file(src_path).await
             .context("Failed to remove original log file after compression")?;
 
         Ok(())
