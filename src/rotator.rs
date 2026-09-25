@@ -65,7 +65,7 @@ impl LogRotator {
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
 
         // 1. Identify existing backups to maintain the limit
-        let mut backups = self.list_backups().await?;
+        let backups = self.list_backups().await?;
         
         // Sort backups by creation time (oldest first)
         let mut metadata_list = Vec::new();
@@ -124,11 +124,8 @@ impl LogRotator {
     }
 
     async fn compress_and_move(&self, src: &str, dst: &str) -> Result<()> {
-        let src_path = Path::new(src);
-        let dst_path = Path::new(dst);
-
-        let src_path_owned = src_path.to_path_buf();
-        let dst_path_owned = dst_path.to_path_buf();
+        let src_path_owned = src.to_string();
+        let dst_path_owned = dst.to_string();
 
         tokio::task::spawn_blocking(move || {
             let mut input = std::fs::File::open(&src_path_owned)
@@ -144,7 +141,7 @@ impl LogRotator {
             Ok::<(), anyhow::Error>(())
         }).await.context("Join error during compression")?;
 
-        fs::remove_file(src_path).await
+        fs::remove_file(src).await
             .context("Failed to remove original log file after compression")?;
 
         Ok(())
@@ -247,6 +244,32 @@ mod tests {
 
         // Now it should rotate because today != 2000-01-01
         assert!(rotator.check_and_rotate().await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_compression_rotation() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("compress.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+        fs::write(&log_path, "compressed content").await?;
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 1,
+            max_backups: 3,
+            compression: true,
+            dry_run: false,
+            strategy: RotationStrategy::Size,
+        };
+        let mut rotator = LogRotator::new(config);
+
+        assert!(rotator.check_and_rotate().await?);
+        
+        let backups = rotator.list_backups().await?;
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].to_str().unwrap().ends_with(".gz"));
 
         Ok(())
     }
