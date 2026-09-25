@@ -120,15 +120,26 @@ impl LogRotator {
             if let Some(name) = path.file_name() {
                 let name_str = name.to_string_lossy();
                 
-                // If using a custom pattern, we might need a more complex way to identify backups.
-                // For now, we continue to identify them as files that start with the log filename 
-                // OR match the custom pattern (though pattern matching is hard without regex).
-                // As a simplification, if a pattern is provided, we trust that it avoids collision
-                // and we check for the extension and a generic relationship to the log file.
-                if name_str != filename_str && name_str.ends_with(ext) {
-                    if self.config.backup_pattern.is_some() || name_str.starts_with(&filename_str) {
-                        backups.push(path);
+                if name_str == filename_str {
+                    continue;
+                }
+
+                if !name_str.ends_with(ext) {
+                    continue;
+                }
+
+                let is_backup = if let Some(ref pattern) = self.config.backup_pattern {
+                    if let Some(prefix) = pattern.split("{timestamp}").next() {
+                        name_str.starts_with(prefix)
+                    } else {
+                        false
                     }
+                } else {
+                    name_str.starts_with(&filename_str)
+                };
+
+                if is_backup {
+                    backups.push(path);
                 }
             }
         }
@@ -173,7 +184,6 @@ mod tests {
         let log_path = dir.path().join("test.log");
         let log_path_str = log_path.to_str().unwrap().to_string();
 
-        // Create a log file smaller than max_size
         fs::write(&log_path, "small content").await?;
 
         let config = RotationConfig {
@@ -188,14 +198,11 @@ mod tests {
         };
         let mut rotator = LogRotator::new(config);
 
-        // Should not rotate yet
         assert!(!rotator.check_and_rotate().await?);
 
-        // Expand log file beyond max_size
         let large_content = "a".repeat(101);
         fs::write(&log_path, large_content).await?;
 
-        // Should rotate now
         assert!(rotator.check_and_rotate().await?);
         assert!(!log_path.exists());
 
@@ -220,16 +227,13 @@ mod tests {
         };
         let mut rotator = LogRotator::new(config);
 
-        // Rotate 3 times
         for _ in 0..3 {
             fs::write(&log_path, "some content").await?;
             rotator.check_and_rotate().await?;
-            // Brief sleep to ensure different timestamps
             tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         }
 
         let backups = rotator.list_backups().await?;
-        // We should only have 2 backups (max_backups = 2)
         assert_eq!(backups.len(), 2);
 
         Ok(())
@@ -254,13 +258,10 @@ mod tests {
         };
         let mut rotator = LogRotator::new(config);
 
-        // First check: sets last_rotation_date, doesn't rotate
         assert!(!rotator.check_and_rotate().await?);
 
-        // Manually simulate date change
         rotator.last_rotation_date = Some(chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
-        // Now it should rotate because today != 2000-01-01
         assert!(rotator.check_and_rotate().await?);
 
         Ok(())
