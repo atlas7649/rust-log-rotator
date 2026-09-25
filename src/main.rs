@@ -7,29 +7,41 @@ use std::time::Duration;
 use tokio::time::{interval, MissedTickBehavior};
 use std::env;
 use tokio::signal;
+use tracing::{info, warn, error, Level};
+use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize tracing subscriber
+    let subscriber = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .finish();
+    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+
     let config_path = env::args().nth(1).unwrap_or_else(|| "config.json".to_string());
     
     let config = match RotationConfig::load_from_file(&config_path).await {
         Ok(cfg) => {
-            println!("Loaded configuration from {}", config_path);
+            info!(path = %config_path, "Loaded configuration");
             cfg
         },
         Err(e) => {
-            eprintln!("Could not load config from {}: {}. Using defaults.", config_path, e);
+            warn!(path = %config_path, error = %e, "Could not load config, using defaults");
             RotationConfig::default()
         }
     };
 
     let mut rotator = LogRotator::new(config.clone());
 
-    println!("Monitoring log file: {}", config.log_file_path);
-    println!("Strategy: {:?}", config.strategy);
-    println!("Check interval: {} seconds", config.check_interval_secs);
+    info!(
+        log_file = %config.log_file_path, 
+        strategy = ?config.strategy, 
+        interval = config.check_interval_secs, 
+        "Monitoring started"
+    );
+    
     if config.dry_run {
-        println!("Dry run mode enabled - no files will be modified");
+        info!("Dry run mode enabled - no files will be modified");
     }
 
     let mut check_interval = interval(Duration::from_secs(config.check_interval_secs));
@@ -38,20 +50,20 @@ async fn main() -> anyhow::Result<()> {
     loop {
         tokio::select! {
             _ = signal::ctrl_c() => {
-                println!("\nShutdown signal received. Performing final check...");
+                info!("Shutdown signal received. Performing final check...");
                 match rotator.check_and_rotate().await {
-                    Ok(true) => println!("Final rotation completed successfully"),
-                    Ok(false) => println!("No rotation needed during shutdown"),
-                    Err(e) => eprintln!("Error during final rotation check: {}", e),
+                    Ok(true) => info!("Final rotation completed successfully"),
+                    Ok(false) => info!("No rotation needed during shutdown"),
+                    Err(e) => error!(error = %e, "Error during final rotation check"),
                 }
-                println!("Shutting down log rotator...");
+                info!("Shutting down log rotator...");
                 break;
             }
             _ = check_interval.tick() => {
                 match rotator.check_and_rotate().await {
-                    Ok(true) => println!("Log rotated successfully at {}", chrono::Local::now()),
+                    Ok(true) => info!(timestamp = %chrono::Local::now(), "Log rotated successfully"),
                     Ok(false) => {},
-                    Err(e) => eprintln!("Error during rotation check: {}", e),
+                    Err(e) => error!(error = %e, "Error during rotation check"),
                 }
             }
         }

@@ -5,6 +5,7 @@ use tokio::fs;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::io::Write;
+use tracing::{info, debug, warn};
 
 pub struct LogRotator {
     config: RotationConfig,
@@ -22,6 +23,7 @@ impl LogRotator {
     pub async fn check_and_rotate(&mut self) -> Result<bool> {
         let path = Path::new(&self.config.log_file_path);
         if !path.exists() {
+            debug!("Log file does not exist, skipping check: {}", self.config.log_file_path);
             return Ok(false);
         }
 
@@ -55,7 +57,11 @@ impl LogRotator {
 
         if should_rotate {
             if self.config.dry_run {
-                println!("[Dry Run] Log file {} triggered rotation strategy {:?}, would rotate", self.config.log_file_path, self.config.strategy);
+                info!(
+                    "[Dry Run] Log file {} triggered rotation strategy {:?}, would rotate", 
+                    self.config.log_file_path, 
+                    self.config.strategy
+                );
                 return Ok(false);
             }
             self.rotate().await?;
@@ -90,6 +96,7 @@ impl LogRotator {
         for (path, created) in metadata_list {
             let age = now.signed_duration_since(chrono::DateTime::from(created));
             if age.num_days() >= self.config.max_age_days as i64 {
+                debug!("Removing expired backup: {:?}", path);
                 fs::remove_file(path).await
                     .context("Failed to remove expired backup file")?;
             } else {
@@ -101,6 +108,7 @@ impl LogRotator {
         let to_remove_count = remaining_metadata.len().saturating_sub(self.config.max_backups - 1);
         for i in 0..to_remove_count {
             if let Some((path, _)) = remaining_metadata.get(i) {
+                debug!("Removing oldest backup to maintain limit: {:?}", path);
                 fs::remove_file(path).await
                     .context("Failed to remove oldest backup file")?;
             }
