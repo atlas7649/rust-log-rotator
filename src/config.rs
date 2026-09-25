@@ -17,6 +17,7 @@ pub struct RotationConfig {
     pub compression: bool,
     pub dry_run: bool,
     pub strategy: RotationStrategy,
+    pub check_interval_secs: u64,
 }
 
 impl Default for RotationConfig {
@@ -28,6 +29,7 @@ impl Default for RotationConfig {
             compression: false,
             dry_run: false,
             strategy: RotationStrategy::Size,
+            check_interval_secs: 60,
         }
     }
 }
@@ -54,12 +56,13 @@ mod tests {
         assert_eq!(cfg.log_file_path, "app.log");
         assert_eq!(cfg.max_backups, 5);
         assert_eq!(cfg.strategy, RotationStrategy::Size);
+        assert_eq!(cfg.check_interval_secs, 60);
     }
 
     #[tokio::test]
     async fn test_load_config() -> Result<()> {
         let mut tmp_file = NamedTempFile::new()?;
-        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true, "strategy": "Daily"}"#;
+        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true, "strategy": "Daily", "check_interval_secs": 30}"#;
         tmp_file.write_all(json.as_bytes())?;
 
         let config = RotationConfig::load_from_file(tmp_file.path()).await?;
@@ -69,6 +72,7 @@ mod tests {
         assert!(config.compression);
         assert!(config.dry_run);
         assert_eq!(config.strategy, RotationStrategy::Daily);
+        assert_eq!(config.check_interval_secs, 30);
         Ok(())
     }
 }

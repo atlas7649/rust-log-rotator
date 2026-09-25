@@ -27,11 +27,12 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Monitoring log file: {}", config.log_file_path);
     println!("Strategy: {:?}", config.strategy);
+    println!("Check interval: {} seconds", config.check_interval_secs);
     if config.dry_run {
         println!("Dry run mode enabled - no files will be modified");
     }
 
-    let mut check_interval = interval(Duration::from_secs(60));
+    let mut check_interval = interval(Duration::from_secs(config.check_interval_secs));
     check_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     loop {
