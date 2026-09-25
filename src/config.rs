@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum RotationStrategy {
@@ -45,7 +45,24 @@ impl RotationConfig {
             .context("Failed to read configuration file")?;
         let config = serde_json::from_str(&content)
             .context("Failed to parse configuration JSON")?;
+        config.validate()?;
         Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if self.log_file_path.is_empty() {
+            return Err(anyhow!("log_file_path cannot be empty"));
+        }
+        if self.max_size_bytes == 0 {
+            return Err(anyhow!("max_size_bytes must be greater than 0"));
+        }
+        if self.check_interval_secs == 0 {
+            return Err(anyhow!("check_interval_secs must be greater than 0"));
+        }
+        if self.max_backups == 0 {
+            return Err(anyhow!("max_backups must be at least 1"));
+        }
+        Ok(())
     }
 }
 
@@ -82,5 +99,18 @@ mod tests {
         assert_eq!(config.backup_pattern, Some("backup_{timestamp}.log".to_string()));
         assert_eq!(config.max_age_days, 14);
         Ok(())
+    }
+
+    #[test]
+    fn test_validation() {
+        let mut cfg = RotationConfig::default();
+        assert!(cfg.validate().is_ok());
+
+        cfg.max_size_bytes = 0;
+        assert!(cfg.validate().is_err());
+
+        cfg.max_size_bytes = 100;
+        cfg.log_file_path = "".to_string();
+        assert!(cfg.validate().is_err());
     }
 }
