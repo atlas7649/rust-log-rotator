@@ -45,6 +45,12 @@ impl LogRotator {
                     false
                 }
             }
+            RotationStrategy::Age => {
+                let metadata = fs::metadata(path).await?;
+                let created = metadata.created().context("Failed to get file creation time")?;
+                let age = chrono::Local::now().signed_duration_since(chrono::DateTime::from(created));
+                age.num_days() >= self.config.max_age_days as i64
+            }
         };
 
         if should_rotate {
@@ -195,6 +201,7 @@ mod tests {
             strategy: RotationStrategy::Size,
             check_interval_secs: 60,
             backup_pattern: None,
+            max_age_days: 7,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -224,6 +231,7 @@ mod tests {
             strategy: RotationStrategy::Size,
             check_interval_secs: 60,
             backup_pattern: None,
+            max_age_days: 7,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -255,6 +263,7 @@ mod tests {
             strategy: RotationStrategy::Daily,
             check_interval_secs: 60,
             backup_pattern: None,
+            max_age_days: 7,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -283,6 +292,7 @@ mod tests {
             strategy: RotationStrategy::Size,
             check_interval_secs: 60,
             backup_pattern: None,
+            max_age_days: 7,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -311,6 +321,7 @@ mod tests {
             strategy: RotationStrategy::Size,
             check_interval_secs: 60,
             backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+            max_age_days: 7,
         };
         let mut rotator = LogRotator::new(config);
 

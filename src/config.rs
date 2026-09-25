@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 pub enum RotationStrategy {
     Size,
     Daily,
+    Age,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -19,6 +20,7 @@ pub struct RotationConfig {
     pub strategy: RotationStrategy,
     pub check_interval_secs: u64,
     pub backup_pattern: Option<String>,
+    pub max_age_days: u64,
 }
 
 impl Default for RotationConfig {
@@ -32,6 +34,7 @@ impl Default for RotationConfig {
             strategy: RotationStrategy::Size,
             check_interval_secs: 60,
             backup_pattern: None,
+            max_age_days: 7,
         }
     }
 }
@@ -60,12 +63,13 @@ mod tests {
         assert_eq!(cfg.strategy, RotationStrategy::Size);
         assert_eq!(cfg.check_interval_secs, 60);
         assert_eq!(cfg.backup_pattern, None);
+        assert_eq!(cfg.max_age_days, 7);
     }
 
     #[tokio::test]
     async fn test_load_config() -> Result<()> {
         let mut tmp_file = NamedTempFile::new()?;
-        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true, "strategy": "Daily", "check_interval_secs": 30, "backup_pattern": "backup_{timestamp}.log"}"#;
+        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true, "strategy": "Daily", "check_interval_secs": 30, "backup_pattern": "backup_{timestamp}.log", "max_age_days": 14}"#;
         tmp_file.write_all(json.as_bytes())?;
 
         let config = RotationConfig::load_from_file(tmp_file.path()).await?;
@@ -76,6 +80,7 @@ mod tests {
         assert_eq!(config.strategy, RotationStrategy::Daily);
         assert_eq!(config.check_interval_secs, 30);
         assert_eq!(config.backup_pattern, Some("backup_{timestamp}.log".to_string()));
+        assert_eq!(config.max_age_days, 14);
         Ok(())
     }
 }
