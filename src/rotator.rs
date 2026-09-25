@@ -88,7 +88,11 @@ impl LogRotator {
         }
 
         // 2. Rotate current log to a new timestamped backup
-        let backup_name = format!("{}_{}{}", self.config.log_file_path, timestamp, ext);
+        let backup_name = if let Some(ref pattern) = self.config.backup_pattern {
+            pattern.replace("{timestamp}", &timestamp) + ext
+        } else {
+            format!("{}_{}{}", self.config.log_file_path, timestamp, ext)
+        };
 
         if self.config.compression {
             self.compress_and_move(&self.config.log_file_path, &backup_name).await?
@@ -115,8 +119,16 @@ impl LogRotator {
             let path = entry.path();
             if let Some(name) = path.file_name() {
                 let name_str = name.to_string_lossy();
-                if name_str.starts_with(&filename_str) && name_str != filename_str && name_str.ends_with(ext) {
-                    backups.push(path);
+                
+                // If using a custom pattern, we might need a more complex way to identify backups.
+                // For now, we continue to identify them as files that start with the log filename 
+                // OR match the custom pattern (though pattern matching is hard without regex).
+                // As a simplification, if a pattern is provided, we trust that it avoids collision
+                // and we check for the extension and a generic relationship to the log file.
+                if name_str != filename_str && name_str.ends_with(ext) {
+                    if self.config.backup_pattern.is_some() || name_str.starts_with(&filename_str) {
+                        backups.push(path);
+                    }
                 }
             }
         }
@@ -171,6 +183,8 @@ mod tests {
             compression: false,
             dry_run: false,
             strategy: RotationStrategy::Size,
+            check_interval_secs: 60,
+            backup_pattern: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -201,6 +215,8 @@ mod tests {
             compression: false,
             dry_run: false,
             strategy: RotationStrategy::Size,
+            check_interval_secs: 60,
+            backup_pattern: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -233,6 +249,8 @@ mod tests {
             compression: false,
             dry_run: false,
             strategy: RotationStrategy::Daily,
+            check_interval_secs: 60,
+            backup_pattern: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -262,6 +280,8 @@ mod tests {
             compression: true,
             dry_run: false,
             strategy: RotationStrategy::Size,
+            check_interval_secs: 60,
+            backup_pattern: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -270,6 +290,36 @@ mod tests {
         let backups = rotator.list_backups().await?;
         assert_eq!(backups.len(), 1);
         assert!(backups[0].to_str().unwrap().ends_with(".gz"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_custom_backup_pattern() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("pattern.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+        fs::write(&log_path, "content").await?;
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 1,
+            max_backups: 3,
+            compression: false,
+            dry_run: false,
+            strategy: RotationStrategy::Size,
+            check_interval_secs: 60,
+            backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+        };
+        let mut rotator = LogRotator::new(config);
+
+        assert!(rotator.check_and_rotate().await?);
+        
+        let backups = rotator.list_backups().await?;
+        assert_eq!(backups.len(), 1);
+        let name = backups[0].file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("archived_"));
+        assert!(name.ends_with(".bak"));
 
         Ok(())
     }
