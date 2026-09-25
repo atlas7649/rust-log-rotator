@@ -84,10 +84,23 @@ impl LogRotator {
         }
         metadata_list.sort_by_key(|&(_, created)| created);
 
-        // Remove oldest if we exceed the limit (including the one we are about to create)
-        let to_remove_count = backups.len().saturating_sub(self.config.max_backups - 1);
+        // Remove backups that exceed max_age_days
+        let now = chrono::Local::now();
+        let mut remaining_metadata = Vec::new();
+        for (path, created) in metadata_list {
+            let age = now.signed_duration_since(chrono::DateTime::from(created));
+            if age.num_days() >= self.config.max_age_days as i64 {
+                fs::remove_file(path).await
+                    .context("Failed to remove expired backup file")?;
+            } else {
+                remaining_metadata.push((path, created));
+            }
+        }
+
+        // Remove oldest if we still exceed the limit (including the one we are about to create)
+        let to_remove_count = remaining_metadata.len().saturating_sub(self.config.max_backups - 1);
         for i in 0..to_remove_count {
-            if let Some((path, _)) = metadata_list.get(i) {
+            if let Some((path, _)) = remaining_metadata.get(i) {
                 fs::remove_file(path).await
                     .context("Failed to remove oldest backup file")?;
             }
