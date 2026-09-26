@@ -84,33 +84,52 @@ impl LogRotator {
         for path in &backups {
             if let Ok(meta) = fs::metadata(path).await {
                 if let Ok(created) = meta.created() {
-                    metadata_list.push((path, created));
+                    metadata_list.push((path, created, meta.len()));
                 }
             }
         }
-        metadata_list.sort_by_key(|&(_, created)| created);
+        metadata_list.sort_by_key(|&(_, created, _)| created);
 
         // Remove backups that exceed max_age_days
         let now = chrono::Local::now();
         let mut remaining_metadata = Vec::new();
-        for (path, created) in metadata_list {
+        for (path, created, size) in metadata_list {
             let age = now.signed_duration_since(chrono::DateTime::from(created));
             if age.num_days() >= self.config.max_age_days as i64 {
                 debug!("Removing expired backup: {:?}", path);
                 fs::remove_file(path).await
                     .context("Failed to remove expired backup file")?;
             } else {
-                remaining_metadata.push((path, created));
+                remaining_metadata.push((path, created, size));
             }
         }
 
         // Remove oldest if we still exceed the limit (including the one we are about to create)
         let to_remove_count = remaining_metadata.len().saturating_sub(self.config.max_backups - 1);
         for i in 0..to_remove_count {
-            if let Some((path, _)) = remaining_metadata.get(i) {
+            if let Some((path, _, _)) = remaining_metadata.get(i) {
                 debug!("Removing oldest backup to maintain limit: {:?}", path);
                 fs::remove_file(path).await
                     .context("Failed to remove oldest backup file")?;
+            }
+        }
+
+        // Prune based on total backup size
+        if let Some(max_total_size) = self.config.max_total_backup_size_bytes {
+            let mut current_total_size: u64 = remaining_metadata.iter().map(|(_, _, size)| *size).sum();
+            
+            // we count remaining_metadata starting from the indices that weren't already removed by max_backups
+            let start_idx = to_remove_count;
+            for i in start_idx..remaining_metadata.len() {
+                if current_total_size <= max_total_size {
+                    break;
+                }
+                if let Some((path, _, size)) = remaining_metadata.get(i) {
+                    debug!("Removing backup {:?} to maintain total size limit", path);
+                    fs::remove_file(path).await
+                        .context("Failed to remove backup for size limit")?;
+                    current_total_size -= size;
+                }
             }
         }
 
@@ -229,6 +248,7 @@ mod tests {
             check_interval_secs: 60,
             backup_pattern: None,
             max_age_days: 7,
+            max_total_backup_size_bytes: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -259,6 +279,7 @@ mod tests {
             check_interval_secs: 60,
             backup_pattern: None,
             max_age_days: 7,
+            max_total_backup_size_bytes: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -270,6 +291,41 @@ mod tests {
 
         let backups = rotator.list_backups().await?;
         assert_eq!(backups.len(), 2);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_total_size_limit() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("size_limit.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 10,
+            max_backups: 10,
+            compression: false,
+            dry_run: false,
+            strategy: RotationStrategy::Size,
+            check_interval_secs: 60,
+            backup_pattern: None,
+            max_age_days: 7,
+            max_total_backup_size_bytes: Some(25), // Small limit
+        };
+        let mut rotator = LogRotator::new(config);
+
+        // Create 3 backups of ~12 bytes each
+        for _ in 0..3 {
+            fs::write(&log_path, "123456789012").await?;
+            rotator.check_and_rotate().await?;
+            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+        }
+
+        // The total size of 3 backups is 36 bytes, which exceeds 25.
+        // One should have been pruned to fit the limit.
+        let backups = rotator.list_backups().await?;
+        assert!(backups.len() < 3);
 
         Ok(())
     }
@@ -291,6 +347,7 @@ mod tests {
             check_interval_secs: 60,
             backup_pattern: None,
             max_age_days: 7,
+            max_total_backup_size_bytes: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -320,6 +377,7 @@ mod tests {
             check_interval_secs: 60,
             backup_pattern: None,
             max_age_days: 0, // Trigger immediately
+            max_total_backup_size_bytes: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -346,6 +404,7 @@ mod tests {
             check_interval_secs: 60,
             backup_pattern: None,
             max_age_days: 7,
+            max_total_backup_size_bytes: None,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -375,6 +434,7 @@ mod tests {
             check_interval_secs: 60,
             backup_pattern: Some("archived_{timestamp}.bak".to_string()),
             max_age_days: 7,
+            max_total_backup_size_bytes: None,
         };
         let mut rotator = LogRotator::new(config);
 
