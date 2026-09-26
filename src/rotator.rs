@@ -49,7 +49,7 @@ impl LogRotator {
             }
             RotationStrategy::Age => {
                 let metadata = fs::metadata(path).await?;
-                let created = metadata.created().context("Failed to get file creation time")?;
+                let created = metadata.created().with_context(|| format!("Failed to get creation time for {}", self.config.log_file_path))?;
                 let age = chrono::Local::now().signed_duration_since(chrono::DateTime::from(created));
                 age.num_days() >= self.config.max_age_days as i64
             }
@@ -299,6 +299,32 @@ mod tests {
         rotator.last_rotation_date = Some(chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
         assert!(rotator.check_and_rotate().await?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_age_rotation_trigger() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("age.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+        fs::write(&log_path, "content").await?;
+
+        let config = RotationConfig {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: 1024 * 1024,
+            max_backups: 3,
+            compression: false,
+            dry_run: false,
+            strategy: RotationStrategy::Age,
+            check_interval_secs: 60,
+            backup_pattern: None,
+            max_age_days: 0, // Trigger immediately
+        };
+        let mut rotator = LogRotator::new(config);
+
+        assert!(rotator.check_and_rotate().await?);
+        assert!(!log_path.exists());
 
         Ok(())
     }
