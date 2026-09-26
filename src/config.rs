@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
 use anyhow::{Context, Result, anyhow};
+use std::env;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum RotationStrategy {
@@ -45,10 +46,44 @@ impl RotationConfig {
     pub async fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(path).await
             .context("Failed to read configuration file")?;
-        let config = serde_json::from_str(&content)
+        let mut config = serde_json::from_str(&content)
             .context("Failed to parse configuration JSON")?;
+        
+        config.apply_env_overrides();
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn apply_env_overrides(&mut self) {
+        if let Ok(val) = env::var("LOG_ROTATOR_FILE") { self.log_file_path = val; }
+        if let Ok(val) = env::var("LOG_ROTATOR_MAX_SIZE") { 
+            if let Ok(n) = val.parse() { self.max_size_bytes = n; }
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_MAX_BACKUPS") { 
+            if let Ok(n) = val.parse() { self.max_backups = n; }
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_COMPRESSION") { 
+            self.compression = val.to_lowercase() == "true";
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_DRY_RUN") { 
+            self.dry_run = val.to_lowercase() == "true";
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_INTERVAL") { 
+            if let Ok(n) = val.parse() { self.check_interval_secs = n; }
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_MAX_AGE") { 
+            if let Ok(n) = val.parse() { self.max_age_days = n; }
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_TOTAL_SIZE") { 
+            if let Ok(n) = val.parse() { self.max_total_backup_size_bytes = Some(n); }
+        }
+        if let Ok(val) = env::var("LOG_ROTATOR_STRATEGY") { 
+            self.strategy = match val.to_lowercase().as_str() {
+                "daily" => RotationStrategy::Daily,
+                "age" => RotationStrategy::Age,
+                _ => RotationStrategy::Size,
+            };
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -116,5 +151,23 @@ mod tests {
         cfg.max_size_bytes = 100;
         cfg.log_file_path = "".to_string();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_env_overrides() {
+        env::set_var("LOG_ROTATOR_FILE", "env.log");
+        env::set_var("LOG_ROTATOR_MAX_BACKUPS", "10");
+        env::set_var("LOG_ROTATOR_STRATEGY", "Age");
+        
+        let mut cfg = RotationConfig::default();
+        cfg.apply_env_overrides();
+        
+        assert_eq!(cfg.log_file_path, "env.log");
+        assert_eq!(cfg.max_backups, 10);
+        assert_eq!(cfg.strategy, RotationStrategy::Age);
+        
+        env::remove_var("LOG_ROTATOR_FILE");
+        env::remove_var("LOG_ROTATOR_MAX_BACKUPS");
+        env::remove_var("LOG_ROTATOR_STRATEGY");
     }
 }
