@@ -12,32 +12,46 @@ pub enum RotationStrategy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-pub struct RotationConfig {
+pub struct RotationTarget {
     pub log_file_path: String,
-    pub max_size_bytes: u64,
-    pub max_backups: usize,
+    pub max_size_bytes: Option<u64>,
+    pub max_backups: Option<usize>,
+    pub strategy: Option<RotationStrategy>,
+    pub backup_pattern: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct RotationConfig {
+    pub targets: Vec<RotationTarget>,
     pub compression: bool,
     pub dry_run: bool,
-    pub strategy: RotationStrategy,
     pub check_interval_secs: u64,
-    pub backup_pattern: Option<String>,
     pub max_age_days: u64,
     pub max_total_backup_size_bytes: Option<u64>,
+    // Defaults for targets if they are not specified
+    pub default_max_size_bytes: u64,
+    pub default_max_backups: usize,
+    pub default_strategy: RotationStrategy,
 }
 
 impl Default for RotationConfig {
     fn default() -> Self {
         Self {
-            log_file_path: "app.log".to_string(),
-            max_size_bytes: 10 * 1024 * 1024, // 10MB
-            max_backups: 5,
+            targets: vec![RotationTarget {
+                log_file_path: "app.log".to_string(),
+                max_size_bytes: None,
+                max_backups: None,
+                strategy: None,
+                backup_pattern: None,
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Size,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 7,
-            max_total_backup_size_bytes: Some(100 * 1024 * 1024), // 100MB default
+            max_total_backup_size_bytes: Some(100 * 1024 * 1024),
+            default_max_size_bytes: 10 * 1024 * 1024,
+            default_max_backups: 5,
+            default_strategy: RotationStrategy::Size,
         }
     }
 }
@@ -55,13 +69,6 @@ impl RotationConfig {
     }
 
     pub fn apply_env_overrides(&mut self) {
-        if let Ok(val) = env::var("LOG_ROTATOR_FILE") { self.log_file_path = val; }
-        if let Ok(val) = env::var("LOG_ROTATOR_MAX_SIZE") { 
-            if let Ok(n) = val.parse() { self.max_size_bytes = n; }
-        }
-        if let Ok(val) = env::var("LOG_ROTATOR_MAX_BACKUPS") { 
-            if let Ok(n) = val.parse() { self.max_backups = n; }
-        }
         if let Ok(val) = env::var("LOG_ROTATOR_COMPRESSION") { 
             self.compression = val.to_lowercase() == "true";
         }
@@ -77,27 +84,19 @@ impl RotationConfig {
         if let Ok(val) = env::var("LOG_ROTATOR_TOTAL_SIZE") { 
             if let Ok(n) = val.parse() { self.max_total_backup_size_bytes = Some(n); }
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_STRATEGY") { 
-            self.strategy = match val.to_lowercase().as_str() {
-                "daily" => RotationStrategy::Daily,
-                "age" => RotationStrategy::Age,
-                _ => RotationStrategy::Size,
-            };
-        }
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.log_file_path.is_empty() {
-            return Err(anyhow!("log_file_path cannot be empty"));
+        if self.targets.is_empty() {
+            return Err(anyhow!("At least one rotation target must be specified"));
         }
-        if self.max_size_bytes == 0 {
-            return Err(anyhow!("max_size_bytes must be greater than 0"));
+        for target in &self.targets {
+            if target.log_file_path.is_empty() {
+                return Err(anyhow!("log_file_path cannot be empty"));
+            }
         }
         if self.check_interval_secs == 0 {
             return Err(anyhow!("check_interval_secs must be greater than 0"));
-        }
-        if self.max_backups == 0 {
-            return Err(anyhow!("max_backups must be at least 1"));
         }
         Ok(())
     }
@@ -112,11 +111,11 @@ mod tests {
     #[tokio::test]
     async fn test_default_config() {
         let cfg = RotationConfig::default();
-        assert_eq!(cfg.log_file_path, "app.log");
-        assert_eq!(cfg.max_backups, 5);
-        assert_eq!(cfg.strategy, RotationStrategy::Size);
+        assert_eq!(cfg.targets.len(), 1);
+        assert_eq!(cfg.targets[0].log_file_path, "app.log");
+        assert_eq!(cfg.default_max_backups, 5);
+        assert_eq!(cfg.default_strategy, RotationStrategy::Size);
         assert_eq!(cfg.check_interval_secs, 60);
-        assert_eq!(cfg.backup_pattern, None);
         assert_eq!(cfg.max_age_days, 7);
         assert_eq!(cfg.max_total_backup_size_bytes, Some(100 * 1024 * 1024));
     }
@@ -124,17 +123,29 @@ mod tests {
     #[tokio::test]
     async fn test_load_config() -> Result<()> {
         let mut tmp_file = NamedTempFile::new()?;
-        let json = r#"{"log_file_path": "test.log", "max_size_bytes": 100, "max_backups": 2, "compression": true, "dry_run": true, "strategy": "Daily", "check_interval_secs": 30, "backup_pattern": "backup_{timestamp}.log", "max_age_days": 14, "max_total_backup_size_bytes": 500}"#;
+        let json = r#"{
+            "targets": [ 
+                {"log_file_path": "test1.log", "max_size_bytes": 100}, 
+                {"log_file_path": "test2.log", "strategy": "Daily"}
+            ], 
+            "compression": true, 
+            "dry_run": true, 
+            "check_interval_secs": 30, 
+            "max_age_days": 14, 
+            "max_total_backup_size_bytes": 500,
+            "default_max_size_bytes": 1000,
+            "default_max_backups": 10,
+            "default_strategy": "Size"
+        }"#;
         tmp_file.write_all(json.as_bytes())?;
 
         let config = RotationConfig::load_from_file(tmp_file.path()).await?;
-        assert_eq!(config.log_file_path, "test.log");
-        assert_eq!(config.max_size_bytes, 100);
+        assert_eq!(config.targets.len(), 2);
+        assert_eq!(config.targets[0].log_file_path, "test1.log");
+        assert_eq!(config.targets[1].log_file_path, "test2.log");
         assert!(config.compression);
         assert!(config.dry_run);
-        assert_eq!(config.strategy, RotationStrategy::Daily);
         assert_eq!(config.check_interval_secs, 30);
-        assert_eq!(config.backup_pattern, Some("backup_{timestamp}.log".to_string()));
         assert_eq!(config.max_age_days, 14);
         assert_eq!(config.max_total_backup_size_bytes, Some(500));
         Ok(())
@@ -145,29 +156,16 @@ mod tests {
         let mut cfg = RotationConfig::default();
         assert!(cfg.validate().is_ok());
 
-        cfg.max_size_bytes = 0;
+        cfg.targets = vec![];
         assert!(cfg.validate().is_err());
 
-        cfg.max_size_bytes = 100;
-        cfg.log_file_path = "".to_string();
+        cfg.targets = vec![RotationTarget {
+            log_file_path: "".to_string(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: None,
+        }];
         assert!(cfg.validate().is_err());
-    }
-
-    #[test]
-    fn test_env_overrides() {
-        env::set_var("LOG_ROTATOR_FILE", "env.log");
-        env::set_var("LOG_ROTATOR_MAX_BACKUPS", "10");
-        env::set_var("LOG_ROTATOR_STRATEGY", "Age");
-        
-        let mut cfg = RotationConfig::default();
-        cfg.apply_env_overrides();
-        
-        assert_eq!(cfg.log_file_path, "env.log");
-        assert_eq!(cfg.max_backups, 10);
-        assert_eq!(cfg.strategy, RotationStrategy::Age);
-        
-        env::remove_var("LOG_ROTATOR_FILE");
-        env::remove_var("LOG_ROTATOR_MAX_BACKUPS");
-        env::remove_var("LOG_ROTATOR_STRATEGY");
     }
 }

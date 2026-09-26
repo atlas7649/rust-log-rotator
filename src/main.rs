@@ -44,8 +44,7 @@ async fn main() -> anyhow::Result<()> {
     let (tx, mut rx) = mpsc::channel::<ControlSignal>(32);
 
     info!(
-        log_file = %config.log_file_path, 
-        strategy = ?config.strategy, 
+        targets = ?config.targets.len(), 
         interval = config.check_interval_secs, 
         "Monitoring started"
     );
@@ -98,17 +97,17 @@ async fn main() -> anyhow::Result<()> {
                 match sig {
                     ControlSignal::RotateNow => {
                         info!("Manual rotation trigger received");
-                        match rotator.check_and_rotate().await {
-                            Ok(true) => info!("Manual rotation successful"),
-                            Ok(false) => info!("Manual rotation not needed"),
+                        match rotator.check_and_rotate_all().await {
+                            Ok(n) if n > 0 => info!(count = n, "Manual rotation successful"),
+                            Ok(_) => info!("Manual rotation not needed"),
                             Err(e) => error!(error = %e, "Error during manual rotation"),
                         }
                     }
                     ControlSignal::Shutdown => {
                         info!("Shutdown signal received. Performing final check...");
-                        match rotator.check_and_rotate().await {
-                            Ok(true) => info!("Final rotation completed successfully"),
-                            Ok(false) => info!("No rotation needed during shutdown"),
+                        match rotator.check_and_rotate_all().await {
+                            Ok(n) if n > 0 => info!(count = n, "Final rotation completed successfully"),
+                            Ok(_) => info!("No rotation needed during shutdown"),
                             Err(e) => error!(error = %e, "Error during final rotation check"),
                         }
                         info!("Shutting down log rotator...");
@@ -117,9 +116,9 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             _ = check_interval.tick() => {
-                match rotator.check_and_rotate().await {
-                    Ok(true) => info!(timestamp = %chrono::Local::now(), "Log rotated successfully"),
-                    Ok(false) => {},
+                match rotator.check_and_rotate_all().await {
+                    Ok(n) if n > 0 => info!(timestamp = %chrono::Local::now(), count = n, "Logs rotated successfully"),
+                    Ok(_) => {},
                     Err(e) => error!(error = %e, "Error during rotation check"),
                 }
             }

@@ -1,4 +1,4 @@
-use crate::config::{RotationConfig, RotationStrategy};
+use crate::config::{RotationConfig, RotationStrategy, RotationTarget};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -9,47 +9,57 @@ use tracing::{info, debug, warn};
 
 pub struct LogRotator {
     config: RotationConfig,
-    last_rotation_date: Option<chrono::NaiveDate>,
+    last_rotation_dates: std::collections::HashMap<String, chrono::NaiveDate>,
 }
 
 impl LogRotator {
     pub fn new(config: RotationConfig) -> Self {
         Self {
             config,
-            last_rotation_date: None,
+            last_rotation_dates: std::collections::HashMap::new(),
         }
     }
 
-    pub async fn check_and_rotate(&mut self) -> Result<bool> {
-        let path = Path::new(&self.config.log_file_path);
+    pub async fn check_and_rotate_all(&mut self) -> Result<usize> {
+        let mut rotated_count = 0;
+        for target in &self.config.targets {
+            if self.check_and_rotate_target(target).await? {
+                rotated_count += 1;
+            }
+        }
+        Ok(rotated_count)
+    }
+
+    async fn check_and_rotate_target(&mut self, target: &RotationTarget) -> Result<bool> {
+        let path = Path::new(&target.log_file_path);
         if !path.exists() {
-            debug!("Log file does not exist, skipping check: {}", self.config.log_file_path);
+            debug!("Log file does not exist, skipping check: {}", target.log_file_path);
             return Ok(false);
         }
 
-        let should_rotate = match self.config.strategy {
+        let strategy = target.strategy.as_ref().unwrap_or(&self.config.default_strategy);
+        let max_size = target.max_size_bytes.unwrap_or(self.config.default_max_size_bytes);
+
+        let should_rotate = match strategy {
             RotationStrategy::Size => {
                 let metadata = fs::metadata(path).await?;
-                metadata.len() >= self.config.max_size_bytes
+                metadata.len() >= max_size
             }
             RotationStrategy::Daily => {
                 let today = chrono::Local::now().date_naive();
-                let needs_rotation = match self.last_rotation_date {
-                    Some(last_date) => last_date != today,
-                    None => false,
-                };
-                if needs_rotation {
-                    true
-                } else {
-                    if self.last_rotation_date.is_none() {
-                        self.last_rotation_date = Some(today);
+                let last_date = self.last_rotation_dates.get(&target.log_file_path);
+                match last_date {
+                    Some(date) if *date != today => true,
+                    Some(_) => false,
+                    None => {
+                        self.last_rotation_dates.insert(target.log_file_path.clone(), today);
+                        false
                     }
-                    false
                 }
             }
             RotationStrategy::Age => {
                 let metadata = fs::metadata(path).await?;
-                let created = metadata.created().with_context(|| format!("Failed to get creation time for {}", self.config.log_file_path))?;
+                let created = metadata.created().with_context(|| format!("Failed to get creation time for {}", target.log_file_path))?;
                 let age = chrono::Local::now().signed_duration_since(chrono::DateTime::from(created));
                 age.num_days() >= self.config.max_age_days as i64
             }
@@ -59,25 +69,25 @@ impl LogRotator {
             if self.config.dry_run {
                 info!(
                     "[Dry Run] Log file {} triggered rotation strategy {:?}, would rotate", 
-                    self.config.log_file_path, 
-                    self.config.strategy
+                    target.log_file_path, 
+                    strategy
                 );
                 return Ok(false);
             }
-            self.rotate().await?;
-            self.last_rotation_date = Some(chrono::Local::now().date_naive());
+            self.rotate_target(target).await?;
+            self.last_rotation_dates.insert(target.log_file_path.clone(), chrono::Local::now().date_naive());
             return Ok(true);
         }
 
         Ok(false)
     }
 
-    async fn rotate(&self) -> Result<()> {
+    async fn rotate_target(&self, target: &RotationTarget) -> Result<()> {
         let ext = if self.config.compression { ".gz" } else { "" };
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
 
         // 1. Identify existing backups to maintain the limit
-        let backups = self.list_backups().await?;
+        let backups = self.list_backups(target).await?;
         
         // Sort backups by creation time (oldest first)
         let mut metadata_list = Vec::new();
@@ -104,8 +114,9 @@ impl LogRotator {
             }
         }
 
-        // Remove oldest if we still exceed the limit (including the one we are about to create)
-        let to_remove_count = remaining_metadata.len().saturating_sub(self.config.max_backups - 1);
+        // Remove oldest if we still exceed the limit
+        let max_backups = target.max_backups.unwrap_or(self.config.default_max_backups);
+        let to_remove_count = remaining_metadata.len().saturating_sub(max_backups - 1);
         for i in 0..to_remove_count {
             if let Some((path, _, _)) = remaining_metadata.get(i) {
                 debug!("Removing oldest backup to maintain limit: {:?}", path);
@@ -114,11 +125,12 @@ impl LogRotator {
             }
         }
 
-        // Prune based on total backup size
+        // Prune based on total backup size (this limit is global across all target backups)
         if let Some(max_total_size) = self.config.max_total_backup_size_bytes {
+            // Note: This is a simplified global check based on the current target's backups
+            // For a truly global check, one would need to list all backups for all targets
             let mut current_total_size: u64 = remaining_metadata.iter().map(|(_, _, size)| *size).sum();
             
-            // we count remaining_metadata starting from the indices that weren't already removed by max_backups
             let start_idx = to_remove_count;
             for i in start_idx..remaining_metadata.len() {
                 if current_total_size <= max_total_size {
@@ -134,24 +146,24 @@ impl LogRotator {
         }
 
         // 2. Rotate current log to a new timestamped backup
-        let backup_name = if let Some(ref pattern) = self.config.backup_pattern {
+        let backup_name = if let Some(ref pattern) = target.backup_pattern {
             pattern.replace("{timestamp}", &timestamp) + ext
         } else {
-            format!("{}_{}{}", self.config.log_file_path, timestamp, ext)
+            format!("{}_{}{}", target.log_file_path, timestamp, ext)
         };
 
         if self.config.compression {
-            self.compress_and_move(&self.config.log_file_path, &backup_name).await?;
+            self.compress_and_move(&target.log_file_path, &backup_name).await?;
         } else {
-            fs::rename(&self.config.log_file_path, backup_name).await
+            fs::rename(&target.log_file_path, backup_name).await
                 .context("Failed to rename log file to backup")?;
         }
 
         Ok(())
     }
 
-    async fn list_backups(&self) -> Result<Vec<PathBuf>> {
-        let path = Path::new(&self.config.log_file_path);
+    async fn list_backups(&self, target: &RotationTarget) -> Result<Vec<PathBuf>> {
+        let path = Path::new(&target.log_file_path);
         let parent = path.parent().unwrap_or_else(|| Path::new("."));
         let filename = path.file_name().context("Invalid log file path")?;
         let filename_str = filename.to_string_lossy();
@@ -164,8 +176,7 @@ impl LogRotator {
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
             
-            // Ensure we are not looking at the active log file itself
-            if path == Path::new(&self.config.log_file_path) {
+            if path == Path::new(&target.log_file_path) {
                 continue;
             }
 
@@ -176,7 +187,7 @@ impl LogRotator {
                     continue;
                 }
 
-                let is_backup = if let Some(ref pattern) = self.config.backup_pattern {
+                let is_backup = if let Some(ref pattern) = target.backup_pattern {
                     if let Some(prefix) = pattern.split("{timestamp}").next() {
                         if let Some(suffix) = pattern.split("{timestamp}").last() {
                             name_str.starts_with(prefix) && name_str.contains(suffix)
@@ -226,7 +237,7 @@ impl LogRotator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{RotationConfig, RotationStrategy};
+    use crate::config::{RotationConfig, RotationStrategy, RotationTarget};
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -239,25 +250,30 @@ mod tests {
         fs::write(&log_path, "small content").await?;
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 100,
-            max_backups: 3,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: Some(100),
+                max_backups: Some(3),
+                strategy: Some(RotationStrategy::Size),
+                backup_pattern: None,
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Size,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            default_max_size_bytes: 1024,
+            default_max_backups: 5,
+            default_strategy: RotationStrategy::Size,
         };
         let mut rotator = LogRotator::new(config);
 
-        assert!(!rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 0);
 
         let large_content = "a".repeat(101);
         fs::write(&log_path, large_content).await?;
 
-        assert!(rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
         assert!(!log_path.exists());
 
         Ok(())
@@ -270,26 +286,37 @@ mod tests {
         let log_path_str = log_path.to_str().unwrap().to_string();
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 10,
-            max_backups: 2,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: Some(10),
+                max_backups: Some(2),
+                strategy: Some(RotationStrategy::Size),
+                backup_pattern: None,
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Size,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            default_max_size_bytes: 10,
+            default_max_backups: 2,
+            default_strategy: RotationStrategy::Size,
         };
         let mut rotator = LogRotator::new(config);
 
         for _ in 0..3 {
             fs::write(&log_path, "some content").await?;
-            rotator.check_and_rotate().await?;
+            rotator.check_and_rotate_all().await?;
             tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         }
 
-        let backups = rotator.list_backups().await?;
+        let backups = rotator.list_backups(&RotationTarget {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: None,
+        }).await?;
         assert_eq!(backups.len(), 2);
 
         Ok(())
@@ -302,29 +329,37 @@ mod tests {
         let log_path_str = log_path.to_str().unwrap().to_string();
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 10,
-            max_backups: 10,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: Some(10),
+                max_backups: Some(10),
+                strategy: Some(RotationStrategy::Size),
+                backup_pattern: None,
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Size,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 7,
-            max_total_backup_size_bytes: Some(25), // Small limit
+            max_total_backup_size_bytes: Some(25),
+            default_max_size_bytes: 10,
+            default_max_backups: 10,
+            default_strategy: RotationStrategy::Size,
         };
         let mut rotator = LogRotator::new(config);
 
-        // Create 3 backups of ~12 bytes each
         for _ in 0..3 {
             fs::write(&log_path, "123456789012").await?;
-            rotator.check_and_rotate().await?;
+            rotator.check_and_rotate_all().await?;
             tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
         }
 
-        // The total size of 3 backups is 36 bytes, which exceeds 25.
-        // One should have been pruned to fit the limit.
-        let backups = rotator.list_backups().await?;
+        let backups = rotator.list_backups(&RotationTarget {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: None,
+        }).await?;
         assert!(backups.len() < 3);
 
         Ok(())
@@ -338,24 +373,29 @@ mod tests {
         fs::write(&log_path, "content").await?;
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 1024 * 1024,
-            max_backups: 3,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: None,
+                max_backups: None,
+                strategy: Some(RotationStrategy::Daily),
+                backup_pattern: None,
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Daily,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            default_max_size_bytes: 1024 * 1024,
+            default_max_backups: 3,
+            default_strategy: RotationStrategy::Daily,
         };
         let mut rotator = LogRotator::new(config);
 
-        assert!(!rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 0);
 
-        rotator.last_rotation_date = Some(chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
+        rotator.last_rotation_dates.insert(log_path_str.clone(), chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
 
-        assert!(rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
 
         Ok(())
     }
@@ -368,20 +408,25 @@ mod tests {
         fs::write(&log_path, "content").await?;
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 1024 * 1024,
-            max_backups: 3,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: None,
+                max_backups: None,
+                strategy: Some(RotationStrategy::Age),
+                backup_pattern: None,
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Age,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 0, // Trigger immediately
             max_total_backup_size_bytes: None,
+            default_max_size_bytes: 1024 * 1024,
+            default_max_backups: 3,
+            default_strategy: RotationStrategy::Age,
         };
         let mut rotator = LogRotator::new(config);
 
-        assert!(rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
         assert!(!log_path.exists());
 
         Ok(())
@@ -395,22 +440,33 @@ mod tests {
         fs::write(&log_path, "compressed content").await?;
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 1,
-            max_backups: 3,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: Some(1),
+                max_backups: Some(3),
+                strategy: Some(RotationStrategy::Size),
+                backup_pattern: None,
+            }],
             compression: true,
             dry_run: false,
-            strategy: RotationStrategy::Size,
             check_interval_secs: 60,
-            backup_pattern: None,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            default_max_size_bytes: 1,
+            default_max_backups: 3,
+            default_strategy: RotationStrategy::Size,
         };
         let mut rotator = LogRotator::new(config);
 
-        assert!(rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
         
-        let backups = rotator.list_backups().await?;
+        let backups = rotator.list_backups(&RotationTarget {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: None,
+        }).await?;
         assert_eq!(backups.len(), 1);
         assert!(backups[0].to_str().unwrap().ends_with(".gz"));
 
@@ -425,22 +481,33 @@ mod tests {
         fs::write(&log_path, "content").await?;
 
         let config = RotationConfig {
-            log_file_path: log_path_str.clone(),
-            max_size_bytes: 1,
-            max_backups: 3,
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: Some(1),
+                max_backups: Some(3),
+                strategy: Some(RotationStrategy::Size),
+                backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+            }],
             compression: false,
             dry_run: false,
-            strategy: RotationStrategy::Size,
             check_interval_secs: 60,
-            backup_pattern: Some("archived_{timestamp}.bak".to_string()),
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            default_max_size_bytes: 1,
+            default_max_backups: 3,
+            default_strategy: RotationStrategy::Size,
         };
         let mut rotator = LogRotator::new(config);
 
-        assert!(rotator.check_and_rotate().await?);
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
         
-        let backups = rotator.list_backups().await?;
+        let backups = rotator.list_backups(&RotationTarget {
+            log_file_path: log_path_str.clone(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+        }).await?;
         assert_eq!(backups.len(), 1);
         let name = backups[0].file_name().unwrap().to_string_lossy();
         assert!(name.starts_with("archived_"));
