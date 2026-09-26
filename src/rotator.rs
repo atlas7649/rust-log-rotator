@@ -122,7 +122,7 @@ impl LogRotator {
         };
 
         if self.config.compression {
-            self.compress_and_move(&self.config.log_file_path, &backup_name).await?
+            self.compress_and_move(&self.config.log_file_path, &backup_name).await?;
         } else {
             fs::rename(&self.config.log_file_path, backup_name).await
                 .context("Failed to rename log file to backup")?;
@@ -144,20 +144,26 @@ impl LogRotator {
 
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path();
+            
+            // Ensure we are not looking at the active log file itself
+            if path == Path::new(&self.config.log_file_path) {
+                continue;
+            }
+
             if let Some(name) = path.file_name() {
                 let name_str = name.to_string_lossy();
                 
-                if name_str == filename_str {
-                    continue;
-                }
-
                 if !name_str.ends_with(ext) {
                     continue;
                 }
 
                 let is_backup = if let Some(ref pattern) = self.config.backup_pattern {
                     if let Some(prefix) = pattern.split("{timestamp}").next() {
-                        name_str.starts_with(prefix)
+                        if let Some(suffix) = pattern.split("{timestamp}").last() {
+                            name_str.starts_with(prefix) && name_str.contains(suffix)
+                        } else {
+                            name_str.starts_with(prefix)
+                        }
                     } else {
                         false
                     }
