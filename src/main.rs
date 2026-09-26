@@ -7,8 +7,15 @@ use std::time::Duration;
 use tokio::time::{interval, MissedTickBehavior};
 use std::env;
 use tokio::signal;
+use tokio::sync::mpsc;
 use tracing::{info, warn, error, Level};
 use tracing_subscriber::FmtSubscriber;
+
+#[derive(Debug)]
+enum ControlSignal {
+    RotateNow,
+    Shutdown,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -32,6 +39,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut rotator = LogRotator::new(config.clone());
+    let (tx, mut rx) = mpsc::channel::<ControlSignal>(32);
 
     info!(
         log_file = %config.log_file_path, 
@@ -47,17 +55,37 @@ async fn main() -> anyhow::Result<()> {
     let mut check_interval = interval(Duration::from_secs(config.check_interval_secs));
     check_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
+    // Handle Ctrl-C in a separate task to send Shutdown signal
+    let tx_shutdown = tx.clone();
+    tokio::spawn(async move {
+        if let Ok(_) = signal::ctrl_c().await {
+            let _ = tx_shutdown.send(ControlSignal::Shutdown).await;
+        }
+    });
+
     loop {
         tokio::select! {
-            _ = signal::ctrl_c() => {
-                info!("Shutdown signal received. Performing final check...");
-                match rotator.check_and_rotate().await {
-                    Ok(true) => info!("Final rotation completed successfully"),
-                    Ok(false) => info!("No rotation needed during shutdown"),
-                    Err(e) => error!(error = %e, "Error during final rotation check"),
+            Some(sig) = rx.recv() => {
+                match sig {
+                    ControlSignal::RotateNow => {
+                        info!("Manual rotation trigger received");
+                        match rotator.check_and_rotate().await {
+                            Ok(true) => info!("Manual rotation successful"),
+                            Ok(false) => info!("Manual rotation not needed"),
+                            Err(e) => error!(error = %e, "Error during manual rotation"),
+                        }
+                    }
+                    ControlSignal::Shutdown => {
+                        info!("Shutdown signal received. Performing final check...");
+                        match rotator.check_and_rotate().await {
+                            Ok(true) => info!("Final rotation completed successfully"),
+                            Ok(false) => info!("No rotation needed during shutdown"),
+                            Err(e) => error!(error = %e, "Error during final rotation check"),
+                        }
+                        info!("Shutting down log rotator...");
+                        break;
+                    }
                 }
-                info!("Shutting down log rotator...");
-                break;
             }
             _ = check_interval.tick() => {
                 match rotator.check_and_rotate().await {
