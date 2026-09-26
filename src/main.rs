@@ -8,6 +8,8 @@ use tokio::time::{interval, MissedTickBehavior};
 use std::env;
 use tokio::signal;
 use tokio::sync::mpsc;
+use tokio::net::UnixListener;
+use tokio::io::AsyncReadExt;
 use tracing::{info, warn, error, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -60,6 +62,33 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         if let Ok(_) = signal::ctrl_c().await {
             let _ = tx_shutdown.send(ControlSignal::Shutdown).await;
+        }
+    });
+
+    // Unix domain socket for external triggers
+    let tx_socket = tx.clone();
+    tokio::spawn(async move {
+        let socket_path = "/tmp/rust-log-rotator.sock";
+        let _ = std::fs::remove_file(socket_path);
+        
+        let listener = match UnixListener::bind(socket_path) {
+            Ok(l) => l,
+            Err(e) => {
+                error!(error = %e, "Failed to bind unix socket");
+                return;
+            }
+        };
+        
+        info!(socket = %socket_path, "Listening for external rotation triggers");
+        
+        loop {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0u8; 1024];
+                if let Ok(_) = stream.read(&mut buf).await {
+                    info!("External rotation trigger received via socket");
+                    let _ = tx_socket.send(ControlSignal::RotateNow).await;
+                }
+            }
         }
     });
 
