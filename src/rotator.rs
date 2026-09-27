@@ -49,7 +49,7 @@ impl LogRotator {
         // Grace period check: prevent rotating too frequently
         if let Some(last_time) = self.last_rotation_times.get(&target.log_file_path) {
             let elapsed = chrono::Local::now().signed_duration_since(*last_time);
-            if elapsed.num_seconds() < 30 { // Hardcoded 30s grace period to avoid thrashing
+            if elapsed.num_seconds() < self.config.rotation_grace_period_secs as i64 {
                 return Ok(false);
             }
         }
@@ -306,6 +306,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 1024,
             default_max_backups: 5,
             default_strategy: RotationStrategy::Size,
@@ -342,6 +343,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 10,
             default_max_backups: 2,
             default_strategy: RotationStrategy::Size,
@@ -351,7 +353,7 @@ mod tests {
         for _ in 0..3 {
             fs::write(&log_path, "some content").await?;
             rotator.check_and_rotate_all().await?;
-            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
         let backups = rotator.list_backups(&RotationTarget {
@@ -385,6 +387,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: Some(25),
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 10,
             default_max_backups: 10,
             default_strategy: RotationStrategy::Size,
@@ -394,7 +397,7 @@ mod tests {
         for _ in 0..3 {
             fs::write(&log_path, "123456789012").await?;
             rotator.check_and_rotate_all().await?;
-            tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
         let backups = rotator.list_backups(&RotationTarget {
@@ -429,6 +432,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 1024 * 1024,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Daily,
@@ -464,6 +468,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 0, // Trigger immediately
             max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 1024 * 1024,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Age,
@@ -496,6 +501,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 1,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Size,
@@ -537,6 +543,7 @@ mod tests {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
             default_max_size_bytes: 1,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Size,

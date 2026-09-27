@@ -104,10 +104,15 @@ async fn main() -> anyhow::Result<()> {
                 let mut buf = [0u8; 1024];
                 if let Ok(n) = stream.read(&mut buf).await {
                     let msg = String::from_utf8_lossy(&buf[..n]);
-                    if msg.trim() == "ping" {
+                    let command = msg.trim();
+                    
+                    if command == "ping" {
                         let _ = stream.write_all(b"pong\n").await;
+                    } else if command == "status" {
+                        let status_msg = format!("rotator is running. targets: {}\n", 0); // Simplified status
+                        let _ = stream.write_all(status_msg.as_bytes()).await;
                     } else {
-                        info!("External rotation trigger received via socket: {}", msg.trim());
+                        info!("External rotation trigger received via socket: {}", command);
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
                         let _ = stream.write_all(b"rotating\n").await;
                     }

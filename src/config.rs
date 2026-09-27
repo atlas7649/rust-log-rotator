@@ -28,6 +28,7 @@ pub struct RotationConfig {
     pub check_interval_secs: u64,
     pub max_age_days: u64,
     pub max_total_backup_size_bytes: Option<u64>,
+    pub rotation_grace_period_secs: u64,
     // Defaults for targets if they are not specified
     pub default_max_size_bytes: u64,
     pub default_max_backups: usize,
@@ -49,6 +50,7 @@ impl Default for RotationConfig {
             check_interval_secs: 60,
             max_age_days: 7,
             max_total_backup_size_bytes: Some(100 * 1024 * 1024),
+            rotation_grace_period_secs: 30,
             default_max_size_bytes: 10 * 1024 * 1024,
             default_max_backups: 5,
             default_strategy: RotationStrategy::Size,
@@ -84,6 +86,9 @@ impl RotationConfig {
         if let Ok(val) = env::var("LOG_ROTATOR_TOTAL_SIZE") { 
             if let Ok(n) = val.parse() { self.max_total_backup_size_bytes = Some(n); }
         }
+        if let Ok(val) = env::var("LOG_ROTATOR_GRACE_PERIOD") { 
+            if let Ok(n) = val.parse() { self.rotation_grace_period_secs = n; }
+        }
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -118,6 +123,7 @@ mod tests {
         assert_eq!(cfg.check_interval_secs, 60);
         assert_eq!(cfg.max_age_days, 7);
         assert_eq!(cfg.max_total_backup_size_bytes, Some(100 * 1024 * 1024));
+        assert_eq!(cfg.rotation_grace_period_secs, 30);
     }
 
     #[tokio::test]
@@ -133,6 +139,7 @@ mod tests {
             "check_interval_secs": 30, 
             "max_age_days": 14, 
             "max_total_backup_size_bytes": 500,
+            "rotation_grace_period_secs": 45,
             "default_max_size_bytes": 1000,
             "default_max_backups": 10,
             "default_strategy": "Size"
@@ -148,6 +155,7 @@ mod tests {
         assert_eq!(config.check_interval_secs, 30);
         assert_eq!(config.max_age_days, 14);
         assert_eq!(config.max_total_backup_size_bytes, Some(500));
+        assert_eq!(config.rotation_grace_period_secs, 45);
         Ok(())
     }
 
