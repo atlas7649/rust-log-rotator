@@ -90,73 +90,47 @@ impl LogRotator {
         let ext = if self.config.compression { ".gz" } else { "" };
         let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
 
-        // 1. Identify existing backups to maintain the limit
+        // 1. Local Pruning: Maintain per-target limits first
         let backups = self.list_backups(target).await?;
         
-        // Sort backups by creation time (oldest first)
         let mut metadata_list = Vec::new();
         for path in &backups {
             if let Ok(meta) = fs::metadata(path).await {
                 if let Ok(created) = meta.created() {
-                    metadata_list.push((path, created, meta.len()));
+                    metadata_list.push((path.clone(), created, meta.len()));
                 }
             }
         }
         metadata_list.sort_by_key(|&(_, created, _)| created);
 
-        // Remove backups that exceed max_age_days
         let now = chrono::Local::now();
-        let mut remaining_metadata = Vec::new();
+        let mut remaining_local = Vec::new();
         for (path, created, size) in metadata_list {
             let age = now.signed_duration_since(chrono::DateTime::from(created));
             if age.num_days() >= self.config.max_age_days as i64 {
-                debug!("Removing expired backup: {:?}", path);
-                fs::remove_file(path).await
-                    .context("Failed to remove expired backup file")?;
+                debug!("Removing expired local backup: {:?}", path);
+                let _ = fs::remove_file(path).await;
             } else {
-                remaining_metadata.push((path, created, size));
+                remaining_local.push((path, created, size));
             }
         }
 
-        // Remove oldest if we still exceed the limit
         let max_backups = target.max_backups.unwrap_or(self.config.default_max_backups);
-        let to_remove_count = remaining_metadata.len().saturating_sub(max_backups - 1);
-        for i in 0..to_remove_count {
-            if let Some((path, _, _)) = remaining_metadata.get(i) {
-                debug!("Removing oldest backup to maintain limit: {:?}", path);
-                fs::remove_file(path).await
-                    .context("Failed to remove oldest backup file")?;
+        if remaining_local.len() >= max_backups {
+            let to_remove = remaining_local.len() - max_backups + 1;
+            for i in 0..to_remove {
+                let (path, _, _) = &remaining_local[i];
+                debug!("Removing oldest local backup to maintain limit: {:?}", path);
+                let _ = fs::remove_file(path).await;
             }
         }
 
-        // Prune based on total backup size (Global check across all targets)
+        // 2. Global Pruning: Only if config specifies a global limit
         if let Some(max_total_size) = self.config.max_total_backup_size_bytes {
-            let mut all_backups = Vec::new();
-            for t in &self.config.targets {
-                let t_backups = self.list_backups(t).await?;
-                for pb in t_backups {
-                    if let Ok(meta) = fs::metadata(&pb).await {
-                        if let Ok(created) = meta.created() {
-                            all_backups.push((pb, created, meta.len()));
-                        }
-                    }
-                }
-            }
-            all_backups.sort_by_key(|&(_, created, _)| created);
-
-            let mut current_total_size: u64 = all_backups.iter().map(|(_, _, size)| *size).sum();
-            for (path, _, size) in all_backups {
-                if current_total_size <= max_total_size {
-                    break;
-                }
-                debug!("Removing backup {:?} to maintain global size limit", path);
-                fs::remove_file(path).await
-                    .context("Failed to remove backup for size limit")?;
-                current_total_size -= size;
-            }
+            self.prune_global_backups(max_total_size).await?;
         }
 
-        // 2. Rotate current log to a new timestamped backup
+        // 3. Rotate current log
         let backup_name = if let Some(ref pattern) = target.backup_pattern {
             pattern.replace("{timestamp}", &timestamp) + ext
         } else {
@@ -170,6 +144,38 @@ impl LogRotator {
                 .context("Failed to rename log file to backup")?;
         }
 
+        Ok(())
+    }
+
+    async fn prune_global_backups(&self, max_total_size: u64) -> Result<()> {
+        let mut all_backups = Vec::new();
+        for t in &self.config.targets {
+            let t_backups = self.list_backups(t).await?;
+            for pb in t_backups {
+                if let Ok(meta) = fs::metadata(&pb).await {
+                    if let Ok(created) = meta.created() {
+                        all_backups.push((pb, created, meta.len()));
+                    }
+                }
+            }
+        }
+        
+        all_backups.sort_by_key(|&(_, created, _)| created);
+
+        let mut current_total_size: u64 = all_backups.iter().map(|(_, _, size)| *size).sum();
+        if current_total_size <= max_total_size {
+            return Ok(());
+        }
+
+        for (path, _, size) in all_backups {
+            if current_total_size <= max_total_size {
+                break;
+            }
+            debug!("Removing backup {:?} to maintain global size limit", path);
+            if fs::remove_file(path).await.is_ok() {
+                current_total_size -= size;
+            }
+        }
         Ok(())
     }
 
