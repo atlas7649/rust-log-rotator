@@ -134,6 +134,7 @@ async fn main() -> anyhow::Result<()> {
                             Err(e) => error!(error = %e, "Error during final rotation check"),
                         }
                         info!("Shutting down log rotator...");
+                        let _ = std::fs::remove_file("/tmp/rust-log-rotator.sock");
                         break;
                     }
                 }

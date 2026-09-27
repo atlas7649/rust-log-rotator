@@ -137,6 +137,10 @@ impl LogRotator {
             format!("{}_{}{}", target.log_file_path, timestamp, ext)
         };
 
+        if fs::metadata(&backup_name).await.is_ok() {
+            return Err(anyhow::anyhow!("Backup file {} already exists, skipping rotation to prevent overwrite", backup_name));
+        }
+
         if self.config.compression {
             self.compress_and_move(&target.log_file_path, &backup_name).await?;
         } else {
