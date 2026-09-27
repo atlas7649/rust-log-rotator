@@ -79,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Unix domain socket for external triggers
     let tx_socket = tx.clone();
+    let socket_config = config.clone();
     tokio::spawn(async move {
         let socket_path = "/tmp/rust-log-rotator.sock";
         
@@ -109,7 +110,7 @@ async fn main() -> anyhow::Result<()> {
                     if command == "ping" {
                         let _ = stream.write_all(b"pong\n").await;
                     } else if command == "status" {
-                        let status_msg = format!("rotator is running. targets: {}\n", 0); // Simplified status
+                        let status_msg = format!("rotator is running. targets: {}\n", socket_config.targets.len());
                         let _ = stream.write_all(status_msg.as_bytes()).await;
                     } else {
                         info!("External rotation trigger received via socket: {}", command);
