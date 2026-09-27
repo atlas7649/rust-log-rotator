@@ -110,8 +110,17 @@ async fn main() -> anyhow::Result<()> {
                     if command == "ping" {
                         let _ = stream.write_all(b"pong\n").await;
                     } else if command == "status" {
-                        let status_msg = format!("rotator is running. targets: {}\n", socket_config.targets.len());
+                        let status_msg = format!(
+                            "rotator is running. targets: {}, compression: {}, grace_period: {}s\n", 
+                            socket_config.targets.len(),
+                            socket_config.compression,
+                            socket_config.rotation_grace_period_secs
+                        );
                         let _ = stream.write_all(status_msg.as_bytes()).await;
+                    } else if command == "reload" {
+                        info!("External reload trigger received via socket");
+                        let _ = tx_socket.send(ControlSignal::ReloadConfig).await;
+                        let _ = stream.write_all(b"reloading\n").await;
                     } else {
                         info!("External rotation trigger received via socket: {}", command);
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
