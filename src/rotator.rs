@@ -29,6 +29,24 @@ impl LogRotator {
         self.config = config;
     }
 
+    pub async fn get_operational_stats(&self) -> String {
+        let mut total_count = 0;
+        let mut total_size = 0u64;
+
+        for target in &self.config.targets {
+            if let Ok(backups) = self.list_backups(target).await {
+                total_count += backups.len();
+                for path in backups {
+                    if let Ok(meta) = fs::metadata(path).await {
+                        total_size += meta.len();
+                    }
+                }
+            }
+        }
+
+        format!("stats: total_backups={}, total_backup_size={} bytes\n", total_count, total_size)
+    }
+
     pub async fn check_and_rotate_all(&mut self) -> Result<usize> {
         let mut rotated_count = 0;
         for target in &self.config.targets {

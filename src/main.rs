@@ -18,6 +18,7 @@ enum ControlSignal {
     RotateNow,
     ReloadConfig,
     Shutdown,
+    GetStats(tokio::sync::oneshot::Sender<String>),
 }
 
 #[tokio::main]
@@ -117,6 +118,12 @@ async fn main() -> anyhow::Result<()> {
                             socket_config.rotation_grace_period_secs
                         );
                         let _ = stream.write_all(status_msg.as_bytes()).await;
+                    } else if command == "stats" {
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        let _ = tx_socket.send(ControlSignal::GetStats(resp_tx)).await;
+                        if let Ok(stats) = resp_rx.await {
+                            let _ = stream.write_all(stats.as_bytes()).await;
+                        }
                     } else if command == "reload" {
                         info!("External reload trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::ReloadConfig).await;
@@ -152,6 +159,10 @@ async fn main() -> anyhow::Result<()> {
                             }
                             Err(e) => error!(error = %e, "Failed to reload configuration, keeping old config"),
                         }
+                    }
+                    ControlSignal::GetStats(resp_tx) => {
+                        let stats = rotator.get_operational_stats().await;
+                        let _ = resp_tx.send(stats);
                     }
                     ControlSignal::Shutdown => {
                         info!("Shutdown signal received. Performing final check...");
