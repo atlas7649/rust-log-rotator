@@ -9,7 +9,7 @@ use std::env;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::net::UnixListener;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn, error, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -102,9 +102,15 @@ async fn main() -> anyhow::Result<()> {
         loop {
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];
-                if let Ok(_) = stream.read(&mut buf).await {
-                    info!("External rotation trigger received via socket");
-                    let _ = tx_socket.send(ControlSignal::RotateNow).await;
+                if let Ok(n) = stream.read(&mut buf).await {
+                    let msg = String::from_utf8_lossy(&buf[..n]);
+                    if msg.trim() == "ping" {
+                        let _ = stream.write_all(b"pong\n").await;
+                    } else {
+                        info!("External rotation trigger received via socket: {}", msg.trim());
+                        let _ = tx_socket.send(ControlSignal::RotateNow).await;
+                        let _ = stream.write_all(b"rotating\n").await;
+                    }
                 }
             }
         }

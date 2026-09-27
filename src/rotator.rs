@@ -13,6 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 pub struct LogRotator {
     config: RotationConfig,
     last_rotation_dates: std::collections::HashMap<String, chrono::NaiveDate>,
+    last_rotation_times: std::collections::HashMap<String, chrono::DateTime<chrono::Local>>,
 }
 
 impl LogRotator {
@@ -20,6 +21,7 @@ impl LogRotator {
         Self {
             config,
             last_rotation_dates: std::collections::HashMap::new(),
+            last_rotation_times: std::collections::HashMap::new(),
         }
     }
 
@@ -42,6 +44,14 @@ impl LogRotator {
         if !path.exists() {
             debug!("Log file does not exist, skipping check: {}", target.log_file_path);
             return Ok(false);
+        }
+
+        // Grace period check: prevent rotating too frequently
+        if let Some(last_time) = self.last_rotation_times.get(&target.log_file_path) {
+            let elapsed = chrono::Local::now().signed_duration_since(*last_time);
+            if elapsed.num_seconds() < 30 { // Hardcoded 30s grace period to avoid thrashing
+                return Ok(false);
+            }
         }
 
         let strategy = target.strategy.as_ref().unwrap_or(&self.config.default_strategy);
@@ -82,7 +92,9 @@ impl LogRotator {
                 return Ok(false);
             }
             self.rotate_target(target).await?;
-            self.last_rotation_dates.insert(target.log_file_path.clone(), chrono::Local::now().date_naive());
+            let now = chrono::Local::now();
+            self.last_rotation_dates.insert(target.log_file_path.clone(), now.date_naive());
+            self.last_rotation_times.insert(target.log_file_path.clone(), now);
             return Ok(true);
         }
 
