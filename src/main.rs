@@ -118,6 +118,12 @@ async fn main() -> anyhow::Result<()> {
                             socket_config.rotation_grace_period_secs
                         );
                         let _ = stream.write_all(status_msg.as_bytes()).await;
+                    } else if command == "config" {
+                        if let Ok(json_config) = serde_json::to_string_pretty(&socket_config) {
+                            let _ = stream.write_all(format!("\n{}\\n", json_config).as_bytes()).await;
+                        } else {
+                            let _ = stream.write_all(b"error: failed to serialize config\n").await;
+                        }
                     } else if command == "stats" {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = tx_socket.send(ControlSignal::GetStats(resp_tx)).await;
