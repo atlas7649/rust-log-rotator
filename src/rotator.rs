@@ -20,6 +20,10 @@ impl LogRotator {
         }
     }
 
+    pub fn update_config(&mut self, config: RotationConfig) {
+        self.config = config;
+    }
+
     pub async fn check_and_rotate_all(&mut self) -> Result<usize> {
         let mut rotated_count = 0;
         for target in &self.config.targets {
@@ -125,23 +129,30 @@ impl LogRotator {
             }
         }
 
-        // Prune based on total backup size (this limit is global across all target backups)
+        // Prune based on total backup size (Global check across all targets)
         if let Some(max_total_size) = self.config.max_total_backup_size_bytes {
-            // Note: This is a simplified global check based on the current target's backups
-            // For a truly global check, one would need to list all backups for all targets
-            let mut current_total_size: u64 = remaining_metadata.iter().map(|(_, _, size)| *size).sum();
-            
-            let start_idx = to_remove_count;
-            for i in start_idx..remaining_metadata.len() {
+            let mut all_backups = Vec::new();
+            for t in &self.config.targets {
+                let t_backups = self.list_backups(t).await?;
+                for pb in t_backups {
+                    if let Ok(meta) = fs::metadata(&pb).await {
+                        if let Ok(created) = meta.created() {
+                            all_backups.push((pb, created, meta.len()));
+                        }
+                    }
+                }
+            }
+            all_backups.sort_by_key(|&(_, created, _)| created);
+
+            let mut current_total_size: u64 = all_backups.iter().map(|(_, _, size)| *size).sum();
+            for (path, _, size) in all_backups {
                 if current_total_size <= max_total_size {
                     break;
                 }
-                if let Some((path, _, size)) = remaining_metadata.get(i) {
-                    debug!("Removing backup {:?} to maintain total size limit", path);
-                    fs::remove_file(path).await
-                        .context("Failed to remove backup for size limit")?;
-                    current_total_size -= size;
-                }
+                debug!("Removing backup {:?} to maintain global size limit", path);
+                fs::remove_file(path).await
+                    .context("Failed to remove backup for size limit")?;
+                current_total_size -= size;
             }
         }
 

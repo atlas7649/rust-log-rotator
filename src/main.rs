@@ -16,6 +16,7 @@ use tracing_subscriber::FmtSubscriber;
 #[derive(Debug)]
 enum ControlSignal {
     RotateNow,
+    ReloadConfig,
     Shutdown,
 }
 
@@ -64,6 +65,18 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Handle SIGHUP for config reload (Unix only)
+    let tx_reload = tx.clone();
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut stream = signal(SignalKind::hangup()).expect("failed to install SIGHUP handler");
+        while stream.recv().await.is_some() {
+            info!("SIGHUP received, requesting config reload");
+            let _ = tx_reload.send(ControlSignal::ReloadConfig).await;
+        }
+    });
+
     // Unix domain socket for external triggers
     let tx_socket = tx.clone();
     tokio::spawn(async move {
@@ -101,6 +114,16 @@ async fn main() -> anyhow::Result<()> {
                             Ok(n) if n > 0 => info!(count = n, "Manual rotation successful"),
                             Ok(_) => info!("Manual rotation not needed"),
                             Err(e) => error!(error = %e, "Error during manual rotation"),
+                        }
+                    }
+                    ControlSignal::ReloadConfig => {
+                        info!(path = %config_path, "Reloading configuration");
+                        match RotationConfig::load_from_file(&config_path).await {
+                            Ok(new_config) => {
+                                rotator.update_config(new_config);
+                                info!("Configuration reloaded successfully");
+                            }
+                            Err(e) => error!(error = %e, "Failed to reload configuration, keeping old config"),
                         }
                     }
                     ControlSignal::Shutdown => {
