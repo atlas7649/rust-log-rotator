@@ -7,6 +7,9 @@ use flate2::Compression;
 use std::io::Write;
 use tracing::{info, debug, warn};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 pub struct LogRotator {
     config: RotationConfig,
     last_rotation_dates: std::collections::HashMap<String, chrono::NaiveDate>,
@@ -141,11 +144,19 @@ impl LogRotator {
             return Err(anyhow::anyhow!("Backup file {} already exists, skipping rotation to prevent overwrite", backup_name));
         }
 
+        // Capture original permissions
+        let original_permissions = fs::metadata(&target.log_file_path).await?.permissions();
+
         if self.config.compression {
             self.compress_and_move(&target.log_file_path, &backup_name).await?;
         } else {
             fs::rename(&target.log_file_path, backup_name).await
                 .context("Failed to rename log file to backup")?;
+        }
+
+        // Preserve permissions on the backup file
+        if let Err(e) = fs::set_permissions(&backup_name, original_permissions).await {
+            warn!(error = %e, "Failed to preserve permissions for backup file {}", backup_name);
         }
 
         Ok(())

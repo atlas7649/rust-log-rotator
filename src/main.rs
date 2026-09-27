@@ -81,7 +81,13 @@ async fn main() -> anyhow::Result<()> {
     let tx_socket = tx.clone();
     tokio::spawn(async move {
         let socket_path = "/tmp/rust-log-rotator.sock";
-        let _ = std::fs::remove_file(socket_path);
+        
+        // Try to remove existing socket before binding
+        if std::path::Path::new(socket_path).exists() {
+            if let Err(e) = std::fs::remove_file(socket_path) {
+                error!(error = %e, "Failed to remove existing unix socket");
+            }
+        }
         
         let listener = match UnixListener::bind(socket_path) {
             Ok(l) => l,
