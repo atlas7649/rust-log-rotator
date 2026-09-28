@@ -1,4 +1,4 @@
-use crate::config::{RotationConfig, RotationStrategy, RotationTarget};
+use crate::config::{RotationConfig, RotationStrategy, RotationTarget, BackupNaming};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -121,8 +121,7 @@ impl LogRotator {
 
     async fn rotate_target(&self, target: &RotationTarget) -> Result<()> {
         let ext = if self.config.compression { ".gz" } else { "" };
-        let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-
+        
         // 1. Local Pruning: Maintain per-target limits first
         let backups = self.list_backups(target).await?;
         
@@ -164,10 +163,21 @@ impl LogRotator {
         }
 
         // 3. Rotate current log
-        let backup_name = if let Some(ref pattern) = target.backup_pattern {
-            pattern.replace("{timestamp}", &timestamp) + ext
-        } else {
-            format!("{}_{}{}", target.log_file_path, timestamp, ext)
+        let naming_style = target.naming_style.as_ref().unwrap_or(&self.config.default_naming_style);
+        let backup_name = match naming_style {
+            BackupNaming::Timestamp => {
+                let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                if let Some(ref pattern) = target.backup_pattern {
+                    pattern.replace("{timestamp}", &timestamp) + ext
+                } else {
+                    format!("{}_{}{}", target.log_file_path, timestamp, ext)
+                }
+            },
+            BackupNaming::Sequential => {
+                let current_backups = self.list_backups(target).await?;
+                let next_idx = current_backups.len() + 1;
+                format!("{}.{}{}", target.log_file_path, next_idx, ext)
+            }
         };
 
         if fs::metadata(&backup_name).await.is_ok() {
@@ -318,6 +328,7 @@ mod tests {
                 max_backups: Some(3),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -328,6 +339,7 @@ mod tests {
             default_max_size_bytes: 1024,
             default_max_backups: 5,
             default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -355,6 +367,7 @@ mod tests {
                 max_backups: Some(2),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -365,6 +378,7 @@ mod tests {
             default_max_size_bytes: 10,
             default_max_backups: 2,
             default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -380,6 +394,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            naming_style: None,
         }).await?;
         assert_eq!(backups.len(), 2);
 
@@ -399,6 +414,7 @@ mod tests {
                 max_backups: Some(10),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -409,6 +425,7 @@ mod tests {
             default_max_size_bytes: 10,
             default_max_backups: 10,
             default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -424,6 +441,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            naming_style: None,
         }).await?;
         assert!(backups.len() < 3);
 
@@ -444,6 +462,7 @@ mod tests {
                 max_backups: None,
                 strategy: Some(RotationStrategy::Daily),
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -454,6 +473,7 @@ mod tests {
             default_max_size_bytes: 1024 * 1024,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Daily,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -480,6 +500,7 @@ mod tests {
                 max_backups: None,
                 strategy: Some(RotationStrategy::Age),
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -490,6 +511,7 @@ mod tests {
             default_max_size_bytes: 1024 * 1024,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Age,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -513,6 +535,7 @@ mod tests {
                 max_backups: Some(3),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: true,
             dry_run: false,
@@ -523,6 +546,7 @@ mod tests {
             default_max_size_bytes: 1,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -534,6 +558,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            naming_style: None,
         }).await?;
         assert_eq!(backups.len(), 1);
         assert!(backups[0].to_str().unwrap().ends_with(".gz"));
@@ -555,6 +580,7 @@ mod tests {
                 max_backups: Some(3),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -565,6 +591,7 @@ mod tests {
             default_max_size_bytes: 1,
             default_max_backups: 3,
             default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
         };
         let mut rotator = LogRotator::new(config);
 
@@ -576,6 +603,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+            naming_style: None,
         }).await?;
         assert_eq!(backups.len(), 1);
         let name = backups[0].file_name().unwrap().to_string_lossy();

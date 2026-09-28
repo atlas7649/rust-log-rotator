@@ -12,12 +12,19 @@ pub enum RotationStrategy {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub enum BackupNaming {
+    Timestamp,
+    Sequential,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RotationTarget {
     pub log_file_path: String,
     pub max_size_bytes: Option<u64>,
     pub max_backups: Option<usize>,
     pub strategy: Option<RotationStrategy>,
     pub backup_pattern: Option<String>,
+    pub naming_style: Option<BackupNaming>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -33,6 +40,7 @@ pub struct RotationConfig {
     pub default_max_size_bytes: u64,
     pub default_max_backups: usize,
     pub default_strategy: RotationStrategy,
+    pub default_naming_style: BackupNaming,
 }
 
 impl Default for RotationConfig {
@@ -44,6 +52,7 @@ impl Default for RotationConfig {
                 max_backups: None,
                 strategy: None,
                 backup_pattern: None,
+                naming_style: None,
             }],
             compression: false,
             dry_run: false,
@@ -54,6 +63,7 @@ impl Default for RotationConfig {
             default_max_size_bytes: 10 * 1024 * 1024,
             default_max_backups: 5,
             default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
         }
     }
 }
@@ -124,6 +134,7 @@ mod tests {
         assert_eq!(cfg.max_age_days, 7);
         assert_eq!(cfg.max_total_backup_size_bytes, Some(100 * 1024 * 1024));
         assert_eq!(cfg.rotation_grace_period_secs, 30);
+        assert_eq!(cfg.default_naming_style, BackupNaming::Timestamp);
     }
 
     #[tokio::test]
@@ -173,6 +184,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            naming_style: None,
         }];
         assert!(cfg.validate().is_err());
     }
