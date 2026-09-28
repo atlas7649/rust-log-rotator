@@ -174,14 +174,24 @@ impl LogRotator {
                 }
             },
             BackupNaming::Sequential => {
-                let current_backups = self.list_backups(target).await?;
-                let next_idx = current_backups.len() + 1;
-                format!("{}.{}{}", target.log_file_path, next_idx, ext)
+                let mut next_idx = 1;
+                loop {
+                    let candidate = format!("{}.{}{}", target.log_file_path, next_idx, ext);
+                    if !Path::new(&candidate).exists() {
+                        break candidate;
+                    }
+                    next_idx += 1;
+                }
             }
         };
 
         if fs::metadata(&backup_name).await.is_ok() {
             return Err(anyhow::anyhow!("Backup file {} already exists, skipping rotation to prevent overwrite", backup_name));
+        }
+
+        // Ensure target directory exists
+        if let Some(parent) = Path::new(&backup_name).parent() {
+            fs::create_dir_all(parent).await.context("Failed to create backup directory")?;
         }
 
         // Capture original permissions
@@ -190,7 +200,7 @@ impl LogRotator {
         if self.config.compression {
             self.compress_and_move(&target.log_file_path, &backup_name).await?;
         } else {
-            fs::rename(&target.log_file_path, backup_name).await
+            fs::rename(&target.log_file_path, &backup_name).await
                 .context("Failed to rename log file to backup")?;
         }
 
