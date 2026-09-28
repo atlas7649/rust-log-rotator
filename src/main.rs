@@ -106,9 +106,14 @@ async fn main() -> anyhow::Result<()> {
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];
                 if let Ok(n) = stream.read(&mut buf).await {
+                    if n == 0 { continue; }
                     let msg = String::from_utf8_lossy(&buf[..n]);
                     let command = msg.trim();
                     
+                    if command.is_empty() {
+                        continue;
+                    }
+
                     if command == "ping" {
                         let _ = stream.write_all(b"pong\n").await;
                     } else if command == "status" {
@@ -177,10 +182,12 @@ async fn main() -> anyhow::Result<()> {
                     }
                     ControlSignal::GetStatus(resp_tx) => {
                         let status = format!(
-                            "rotator is running. targets: {}, compression: {}, grace_period: {}s\n", 
+                            "LogRotator Status:\n- Targets: {}\n- Compression: {}\n- Grace Period: {}s\n- Max Age: {} days\n- Dry Run: {}\n", 
                             rotator.config.targets.len(),
                             rotator.config.compression,
-                            rotator.config.rotation_grace_period_secs
+                            rotator.config.rotation_grace_period_secs,
+                            rotator.config.max_age_days,
+                            rotator.config.dry_run
                         );
                         let _ = resp_tx.send(status);
                     }
