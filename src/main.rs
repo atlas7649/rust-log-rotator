@@ -138,7 +138,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     } else if command == "config" {
                         if let Ok(json_config) = serde_json::to_string_pretty(&socket_config) {
-                            let _ = stream.write_all(format!("\n{}\\n", json_config).as_bytes()).await;
+                            let _ = stream.write_all(format!("\n{}\n", json_config).as_bytes()).await;
                         } else {
                             let _ = stream.write_all(b"error: failed to serialize config\n").await;
                         }
