@@ -59,12 +59,23 @@ async fn main() -> anyhow::Result<()> {
     let mut check_interval = interval(Duration::from_secs(config.check_interval_secs));
     check_interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-    // Handle Ctrl-C in a separate task to send Shutdown signal
+    // Handle Termination signals
     let tx_shutdown = tx.clone();
     tokio::spawn(async move {
-        if let Ok(_) = signal::ctrl_c().await {
-            let _ = tx_shutdown.send(ControlSignal::Shutdown).await;
+        let ctrl_c = signal::ctrl_c();
+        #[cfg(unix)]
+        let terminate = async {
+            use tokio::signal::unix::{signal, SignalKind};
+            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler").recv()
+        };
+        #[cfg(not(unix))]
+        let terminate = std::future::pending::<()>();
+
+        tokio::select! {
+            _ = ctrl_c => info!("SIGINT received"),
+            _ = terminate => info!("SIGTERM received"),
         }
+        let _ = tx_shutdown.send(ControlSignal::Shutdown).await;
     });
 
     // Handle SIGHUP for config reload (Unix only)
