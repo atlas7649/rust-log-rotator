@@ -121,6 +121,7 @@ async fn main() -> anyhow::Result<()> {
                         let _ = tx_socket.send(ControlSignal::GetStatus(resp_tx)).await;
                         if let Ok(status) = resp_rx.await {
                             let _ = stream.write_all(status.as_bytes()).await;
+                            let _ = stream.write_all(b"\n").await;
                         } else {
                             let _ = stream.write_all(b"error: could not get status\n").await;
                         }
