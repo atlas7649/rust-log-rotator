@@ -19,6 +19,7 @@ enum ControlSignal {
     ReloadConfig,
     Shutdown,
     GetStats(tokio::sync::oneshot::Sender<String>),
+    GetStatus(tokio::sync::oneshot::Sender<String>),
 }
 
 #[tokio::main]
@@ -111,13 +112,13 @@ async fn main() -> anyhow::Result<()> {
                     if command == "ping" {
                         let _ = stream.write_all(b"pong\n").await;
                     } else if command == "status" {
-                        let status_msg = format!(
-                            "rotator is running. targets: {}, compression: {}, grace_period: {}s\n", 
-                            socket_config.targets.len(),
-                            socket_config.compression,
-                            socket_config.rotation_grace_period_secs
-                        );
-                        let _ = stream.write_all(status_msg.as_bytes()).await;
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        let _ = tx_socket.send(ControlSignal::GetStatus(resp_tx)).await;
+                        if let Ok(status) = resp_rx.await {
+                            let _ = stream.write_all(status.as_bytes()).await;
+                        } else {
+                            let _ = stream.write_all(b"error: could not get status\n").await;
+                        }
                     } else if command == "config" {
                         if let Ok(json_config) = serde_json::to_string_pretty(&socket_config) {
                             let _ = stream.write_all(format!("\n{}\\n", json_config).as_bytes()).await;
@@ -134,6 +135,10 @@ async fn main() -> anyhow::Result<()> {
                         info!("External reload trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::ReloadConfig).await;
                         let _ = stream.write_all(b"reloading\n").await;
+                    } else if command == "force" {
+                        info!("External force rotation trigger received via socket");
+                        let _ = tx_socket.send(ControlSignal::RotateNow).await;
+                        let _ = stream.write_all(b"forcing rotation\n").await;
                     } else {
                         info!("External rotation trigger received via socket: {}", command);
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
@@ -169,6 +174,15 @@ async fn main() -> anyhow::Result<()> {
                     ControlSignal::GetStats(resp_tx) => {
                         let stats = rotator.get_operational_stats().await;
                         let _ = resp_tx.send(stats);
+                    }
+                    ControlSignal::GetStatus(resp_tx) => {
+                        let status = format!(
+                            "rotator is running. targets: {}, compression: {}, grace_period: {}s\n", 
+                            rotator.config.targets.len(),
+                            rotator.config.compression,
+                            rotator.config.rotation_grace_period_secs
+                        );
+                        let _ = resp_tx.send(status);
                     }
                     ControlSignal::Shutdown => {
                         info!("Shutdown signal received. Performing final check...");
