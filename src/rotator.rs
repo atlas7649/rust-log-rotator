@@ -32,19 +32,30 @@ impl LogRotator {
     pub async fn get_operational_stats(&self) -> String {
         let mut total_count = 0;
         let mut total_size = 0u64;
+        let mut target_stats = Vec::new();
 
         for target in &self.config.targets {
+            let mut count = 0;
+            let mut size = 0u64;
             if let Ok(backups) = self.list_backups(target).await {
-                total_count += backups.len();
+                count = backups.len();
                 for path in backups {
                     if let Ok(meta) = fs::metadata(path).await {
-                        total_size += meta.len();
+                        size += meta.len();
                     }
                 }
             }
+            total_count += count;
+            total_size += size;
+            target_stats.push(format!("  - {}: count={}, size={} bytes", target.log_file_path, count, size));
         }
 
-        format!("stats: total_backups={}, total_backup_size={} bytes\n", total_count, total_size)
+        format!(
+            "Operational Stats:\nTotal Backups: {}\nTotal Size: {} bytes\nPer-Target Details:\n{}", 
+            total_count, 
+            total_size, 
+            target_stats.join("\n")
+        )
     }
 
     pub async fn check_and_rotate_all(&mut self) -> Result<usize> {
