@@ -11,7 +11,7 @@ use tracing::{info, debug, warn};
 use std::os::unix::fs::PermissionsExt;
 
 pub struct LogRotator {
-    config: RotationConfig,
+    pub config: RotationConfig,
     last_rotation_dates: std::collections::HashMap<String, chrono::NaiveDate>,
     last_rotation_times: std::collections::HashMap<String, chrono::DateTime<chrono::Local>>,
 }
@@ -26,6 +26,7 @@ impl LogRotator {
     }
 
     pub fn update_config(&mut self, config: RotationConfig) {
+        info!("Updating rotator configuration");
         self.config = config;
     }
 
@@ -338,6 +339,18 @@ mod tests {
     use crate::config::{RotationConfig, RotationStrategy, RotationTarget};
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn test_config_update() {
+        let config1 = RotationConfig::default();
+        let mut rotator = LogRotator::new(config1.clone());
+        
+        let mut config2 = config1.clone();
+        config2.compression = !config1.compression;
+        
+        rotator.update_config(config2.clone());
+        assert_eq!(rotator.config.compression, config2.compression);
+    }
 
     #[tokio::test]
     async fn test_size_rotation_trigger() -> Result<()> {
