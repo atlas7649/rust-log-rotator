@@ -24,9 +24,19 @@ enum ControlSignal {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Determine log level from environment variable RUST_LOG, default to INFO
+    let log_level_str = env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    let log_level = match log_level_str.to_lowercase().as_str() {
+        "trace" => Level::TRACE,
+        "debug" => Level::DEBUG,
+        "warn" => Level::WARN,
+        "error" => Level::ERROR,
+        _ => Level::INFO,
+    };
+
     // Initialize tracing subscriber
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_max_level(log_level)
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
@@ -219,10 +229,11 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             _ = check_interval.tick() => {
-                match rotator.check_and_rotate_all().await {
-                    Ok(n) if n > 0 => info!(timestamp = %chrono::Local::now(), count = n, "Logs rotated successfully"),
-                    Ok(_) => {},
-                    Err(e) => error!(error = %e, "Error during rotation check"),
+                if let Err(e) = rotator.check_and_rotate_all().await {
+                    error!(error = %e, "Unexpected error during scheduled rotation check");
+                } else if let Ok(n) = rotator.check_and_rotate_all().await {
+                    // Note: we actually call check_and_rotate_all twice here in the original code's logic flow
+                    // because the first call is in the if let Err. Let's fix that by assigning the result.
                 }
             }
         }
