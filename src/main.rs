@@ -31,6 +31,7 @@ struct StatusResponse {
     max_age_days: u64,
     dry_run: bool,
     uptime_secs: u64,
+    status: String,
 }
 
 #[tokio::main]
@@ -224,6 +225,7 @@ async fn main() -> anyhow::Result<()> {
                             max_age_days: rotator.config.max_age_days,
                             dry_run: rotator.config.dry_run,
                             uptime_secs: start_time.elapsed().as_secs(),
+                            status: "running".to_string(),
                         };
                         let status = match serde_json::to_string(&status_data) {
                             Ok(json) => json,
