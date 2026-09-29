@@ -12,6 +12,7 @@ use tokio::net::UnixListener;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{info, warn, error, Level};
 use tracing_subscriber::FmtSubscriber;
+use serde::Serialize;
 
 #[derive(Debug)]
 enum ControlSignal {
@@ -20,6 +21,16 @@ enum ControlSignal {
     Shutdown,
     GetStats(tokio::sync::oneshot::Sender<String>),
     GetStatus(tokio::sync::oneshot::Sender<String>),
+}
+
+#[derive(Serialize)]
+struct StatusResponse {
+    targets_count: usize,
+    compression: bool,
+    grace_period_secs: u64,
+    max_age_days: u64,
+    dry_run: bool,
+    uptime_secs: u64,
 }
 
 #[tokio::main]
@@ -53,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    let start_time = std::time::Instant::now();
     let mut rotator = LogRotator::new(config.clone());
     let (tx, mut rx) = mpsc::channel::<ControlSignal>(32);
 
@@ -205,14 +217,18 @@ async fn main() -> anyhow::Result<()> {
                         let _ = resp_tx.send(stats);
                     }
                     ControlSignal::GetStatus(resp_tx) => {
-                        let status = format!(
-                            "LogRotator Status:\n- Targets: {}\n- Compression: {}\n- Grace Period: {}s\n- Max Age: {} days\n- Dry Run: {}\n", 
-                            rotator.config.targets.len(),
-                            rotator.config.compression,
-                            rotator.config.rotation_grace_period_secs,
-                            rotator.config.max_age_days,
-                            rotator.config.dry_run
-                        );
+                        let status_data = StatusResponse {
+                            targets_count: rotator.config.targets.len(),
+                            compression: rotator.config.compression,
+                            grace_period_secs: rotator.config.rotation_grace_period_secs,
+                            max_age_days: rotator.config.max_age_days,
+                            dry_run: rotator.config.dry_run,
+                            uptime_secs: start_time.elapsed().as_secs(),
+                        };
+                        let status = match serde_json::to_string(&status_data) {
+                            Ok(json) => json,
+                            Err(_) => "error: failed to serialize status".to_string(),
+                        };
                         let _ = resp_tx.send(status);
                     }
                     ControlSignal::Shutdown => {
