@@ -127,6 +127,8 @@ async fn main() -> anyhow::Result<()> {
 
                     if command == "ping" {
                         let _ = stream.write_all(b"pong\n").await;
+                    } else if command == "health" {
+                        let _ = stream.write_all(b"ok\n").await;
                     } else if command == "status" {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = tx_socket.send(ControlSignal::GetStatus(resp_tx)).await;
