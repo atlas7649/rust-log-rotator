@@ -229,11 +229,10 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
             _ = check_interval.tick() => {
-                if let Err(e) = rotator.check_and_rotate_all().await {
-                    error!(error = %e, "Unexpected error during scheduled rotation check");
-                } else if let Ok(n) = rotator.check_and_rotate_all().await {
-                    // Note: we actually call check_and_rotate_all twice here in the original code's logic flow
-                    // because the first call is in the if let Err. Let's fix that by assigning the result.
+                match rotator.check_and_rotate_all().await {
+                    Ok(n) if n > 0 => debug!(count = n, "Scheduled rotation performed"),
+                    Ok(_) => {},
+                    Err(e) => error!(error = %e, "Unexpected error during scheduled rotation check"),
                 }
             }
         }
