@@ -9,6 +9,7 @@ pub enum RotationStrategy {
     Size,
     Daily,
     Age,
+    Keyword(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

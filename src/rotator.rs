@@ -110,6 +110,11 @@ impl LogRotator {
                 let age = chrono::Local::now().signed_duration_since(chrono::DateTime::from(created));
                 age.num_days() >= self.config.max_age_days as i64
             }
+            RotationStrategy::Keyword(keyword) => {
+                let content = fs::read_to_string(path).await
+                    .with_context(|| format!("Failed to read log file for keyword check: {}", target.log_file_path))?;
+                content.contains(keyword)
+            }
         };
 
         if should_rotate {
@@ -648,6 +653,43 @@ mod tests {
         let name = backups[0].file_name().unwrap().to_string_lossy();
         assert!(name.starts_with("archived_"));
         assert!(name.ends_with(".bak"));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_keyword_rotation_trigger() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("keyword.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+        
+        let config = RotationConfig {
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: None,
+                max_backups: None,
+                strategy: Some(RotationStrategy::Keyword("CRITICAL".to_string())),
+                backup_pattern: None,
+                naming_style: None,
+            }],
+            compression: false,
+            dry_run: false,
+            check_interval_secs: 60,
+            max_age_days: 7,
+            max_total_backup_size_bytes: None,
+            rotation_grace_period_secs: 0,
+            default_max_size_bytes: 1024 * 1024,
+            default_max_backups: 3,
+            default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
+        };
+        let mut rotator = LogRotator::new(config);
+
+        fs::write(&log_path, "Everything is fine").await?;
+        assert_eq!(rotator.check_and_rotate_all().await?, 0);
+
+        fs::write(&log_path, "Something CRITICAL happened").await?;
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
 
         Ok(())
     }
