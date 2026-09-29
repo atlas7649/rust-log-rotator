@@ -200,8 +200,13 @@ impl LogRotator {
         if self.config.compression {
             self.compress_and_move(&target.log_file_path, &backup_name).await?;
         } else {
-            fs::rename(&target.log_file_path, &backup_name).await
-                .context("Failed to rename log file to backup")?;
+            let content = fs::read(&target.log_file_path).await
+                .context("Failed to read log file for rotation")?;
+            fs::write(&backup_name, content).await
+                .context("Failed to write rotated log file")?;
+            
+            fs::write(&target.log_file_path, b"").await
+                .context("Failed to truncate original log file")?;
         }
 
         // Preserve permissions on the backup file
@@ -309,8 +314,8 @@ impl LogRotator {
             Ok::<(), anyhow::Error>(())
         }).await.context("Join error during compression")?;
 
-        fs::remove_file(src).await
-            .context("Failed to remove original log file after compression")?;
+        fs::write(src, b"").await
+            .context("Failed to truncate original log file after compression")?;
 
         Ok(())
     }
@@ -359,7 +364,7 @@ mod tests {
         fs::write(&log_path, large_content).await?;
 
         assert_eq!(rotator.check_and_rotate_all().await?, 1);
-        assert!(!log_path.exists());
+        assert!(log_path.exists());
 
         Ok(())
     }
@@ -526,7 +531,7 @@ mod tests {
         let mut rotator = LogRotator::new(config);
 
         assert_eq!(rotator.check_and_rotate_all().await?, 1);
-        assert!(!log_path.exists());
+        assert!(log_path.exists());
 
         Ok(())
     }
