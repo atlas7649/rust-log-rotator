@@ -115,6 +115,10 @@ impl LogRotator {
                     .with_context(|| format!("Failed to read log file for keyword check: {}", target.log_file_path))?;
                 content.contains(keyword)
             }
+            RotationStrategy::Truncate => {
+                let metadata = fs::metadata(path).await?;
+                metadata.len() >= max_size
+            }
         };
 
         if should_rotate {
@@ -126,7 +130,15 @@ impl LogRotator {
                 );
                 return Ok(false);
             }
-            self.rotate_target(target).await?;
+
+            if let RotationStrategy::Truncate = strategy {
+                debug!("Truncating log file: {}", target.log_file_path);
+                fs::write(&target.log_file_path, b"").await
+                    .context("Failed to truncate log file")?;
+            } else {
+                self.rotate_target(target).await?;
+            }
+
             let now = chrono::Local::now();
             self.last_rotation_dates.insert(target.log_file_path.clone(), now.date_naive());
             self.last_rotation_times.insert(target.log_file_path.clone(), now);
@@ -181,19 +193,20 @@ impl LogRotator {
 
         // 3. Rotate current log
         let naming_style = target.naming_style.as_ref().unwrap_or(&self.config.default_naming_style);
+        let suffix = target.backup_suffix.as_deref().unwrap_or("");
         let backup_name = match naming_style {
             BackupNaming::Timestamp => {
                 let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
                 if let Some(ref pattern) = target.backup_pattern {
-                    pattern.replace("{timestamp}", &timestamp) + ext
+                    pattern.replace("{timestamp}", &timestamp) + suffix + ext
                 } else {
-                    format!("{}_{}{}", target.log_file_path, timestamp, ext)
+                    format!("{}_{}{}{}", target.log_file_path, timestamp, suffix, ext)
                 }
             },
             BackupNaming::Sequential => {
                 let mut next_idx = 1;
                 loop {
-                    let candidate = format!("{}.{}{}", target.log_file_path, next_idx, ext);
+                    let candidate = format!("{}.{}{}{}", target.log_file_path, next_idx, suffix, ext);
                     if !Path::new(&candidate).exists() {
                         break candidate;
                     }
@@ -272,6 +285,7 @@ impl LogRotator {
         let filename = path.file_name().context("Invalid log file path")?;
         let filename_str = filename.to_string_lossy();
         let ext = if self.config.compression { ".gz" } else { "" };
+        let suffix = target.backup_suffix.as_deref().unwrap_or("");
 
         let mut backups = Vec::new();
         let mut entries = fs::read_dir(parent).await
@@ -293,8 +307,8 @@ impl LogRotator {
 
                 let is_backup = if let Some(ref pattern) = target.backup_pattern {
                     if let Some(prefix) = pattern.split("{timestamp}").next() {
-                        if let Some(suffix) = pattern.split("{timestamp}").last() {
-                            name_str.starts_with(prefix) && name_str.contains(suffix)
+                        if let Some(suffix_pat) = pattern.split("{timestamp}").last() {
+                            name_str.starts_with(prefix) && name_str.contains(suffix_pat)
                         } else {
                             name_str.starts_with(prefix)
                         }
@@ -302,7 +316,7 @@ impl LogRotator {
                         false
                     }
                 } else {
-                    name_str.starts_with(&filename_str)
+                    name_str.starts_with(&filename_str) && name_str.contains(suffix)
                 };
 
                 if is_backup {
@@ -372,6 +386,7 @@ mod tests {
                 max_backups: Some(3),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -411,6 +426,7 @@ mod tests {
                 max_backups: Some(2),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -438,6 +454,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            backup_suffix: None,
             naming_style: None,
         }).await?;
         assert_eq!(backups.len(), 2);
@@ -458,6 +475,7 @@ mod tests {
                 max_backups: Some(10),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -485,6 +503,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            backup_suffix: None,
             naming_style: None,
         }).await?;
         assert!(backups.len() < 3);
@@ -506,6 +525,7 @@ mod tests {
                 max_backups: None,
                 strategy: Some(RotationStrategy::Daily),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -544,6 +564,7 @@ mod tests {
                 max_backups: None,
                 strategy: Some(RotationStrategy::Age),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -579,6 +600,7 @@ mod tests {
                 max_backups: Some(3),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: true,
@@ -602,6 +624,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            backup_suffix: None,
             naming_style: None,
         }).await?;
         assert_eq!(backups.len(), 1);
@@ -624,6 +647,7 @@ mod tests {
                 max_backups: Some(3),
                 strategy: Some(RotationStrategy::Size),
                 backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -647,6 +671,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: Some("archived_{timestamp}.bak".to_string()),
+            backup_suffix: None,
             naming_style: None,
         }).await?;
         assert_eq!(backups.len(), 1);
@@ -670,6 +695,7 @@ mod tests {
                 max_backups: None,
                 strategy: Some(RotationStrategy::Keyword("CRITICAL".to_string())),
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,

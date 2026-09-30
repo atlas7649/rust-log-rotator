@@ -10,6 +10,7 @@ pub enum RotationStrategy {
     Daily,
     Age,
     Keyword(String),
+    Truncate,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -25,6 +26,7 @@ pub struct RotationTarget {
     pub max_backups: Option<usize>,
     pub strategy: Option<RotationStrategy>,
     pub backup_pattern: Option<String>,
+    pub backup_suffix: Option<String>,
     pub naming_style: Option<BackupNaming>,
 }
 
@@ -53,6 +55,7 @@ impl Default for RotationConfig {
                 max_backups: None,
                 strategy: None,
                 backup_pattern: None,
+                backup_suffix: None,
                 naming_style: None,
             }],
             compression: false,
@@ -185,6 +188,7 @@ mod tests {
             max_backups: None,
             strategy: None,
             backup_pattern: None,
+            backup_suffix: None,
             naming_style: None,
         }];
         assert!(cfg.validate().is_err());
