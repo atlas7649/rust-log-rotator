@@ -4,7 +4,7 @@ mod rotator;
 use config::RotationConfig;
 use rotator::LogRotator;
 use std::time::Duration;
-use tokio::time::{interval, MissedTickBehavior};
+use tokio::time::{interval, MissedTickBehavior, timeout};
 use std::env;
 use tokio::signal;
 use tokio::sync::mpsc;
@@ -139,7 +139,8 @@ async fn main() -> anyhow::Result<()> {
         loop {
             if let Ok((mut stream, _)) = listener.accept().await {
                 let mut buf = [0u8; 1024];
-                if let Ok(n) = stream.read(&mut buf).await {
+                // Add a timeout to prevent hanging on dead connections
+                if let Ok(Ok(n)) = timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
                     if n == 0 { continue; }
                     let msg = String::from_utf8_lossy(&buf[..n]);
                     let command = msg.trim();
