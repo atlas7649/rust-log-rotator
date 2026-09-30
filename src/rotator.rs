@@ -6,6 +6,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use std::io::Write;
 use tracing::{info, debug, warn};
+use regex::Regex;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -114,6 +115,13 @@ impl LogRotator {
                 let content = fs::read_to_string(path).await
                     .with_context(|| format!("Failed to read log file for keyword check: {}", target.log_file_path))?;
                 content.contains(keyword)
+            }
+            RotationStrategy::Regex(pattern) => {
+                let content = fs::read_to_string(path).await
+                    .with_context(|| format!("Failed to read log file for regex check: {}", target.log_file_path))?;
+                let re = Regex::new(pattern)
+                    .with_context(|| format!("Invalid regex pattern: {}", pattern))?;
+                re.is_match(&content)
             }
             RotationStrategy::Truncate => {
                 let metadata = fs::metadata(path).await?;
