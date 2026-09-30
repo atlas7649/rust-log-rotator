@@ -9,6 +9,7 @@ pub enum RotationStrategy {
     Size,
     Daily,
     Age,
+    Interval(u64), 
     Keyword(String),
     Regex(String),
     Truncate,
