@@ -32,6 +32,7 @@ struct StatusResponse {
     dry_run: bool,
     uptime_secs: u64,
     status: String,
+    last_check_interval_secs: u64,
 }
 
 #[tokio::main]
@@ -227,6 +228,7 @@ async fn main() -> anyhow::Result<()> {
                             dry_run: rotator.config.dry_run,
                             uptime_secs: start_time.elapsed().as_secs(),
                             status: "running".to_string(),
+                            last_check_interval_secs: rotator.config.check_interval_secs,
                         };
                         let status = match serde_json::to_string(&status_data) {
                             Ok(json) => json,
