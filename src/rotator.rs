@@ -765,6 +765,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_regex_rotation_trigger() -> Result<()> {
+        let dir = tempdir()?;
+        let log_path = dir.path().join("regex.log");
+        let log_path_str = log_path.to_str().unwrap().to_string();
+        
+        let config = RotationConfig {
+            targets: vec![RotationTarget {
+                log_file_path: log_path_str.clone(),
+                max_size_bytes: None,
+                max_backups: None,
+                strategy: Some(RotationStrategy::Regex(r"Error: [0-9]{3}".to_string())),
+                backup_pattern: None,
+                backup_suffix: None,
+                naming_style: None,
+            }],
+            compression: false,
+            dry_run: false,
+            check_interval_secs: 60,
+            max_age_days: 7,
+            max_total_backup_size_bytes: None,
+            max_total_backups: None,
+            rotation_grace_period_secs: 0,
+            default_max_size_bytes: 1024 * 1024,
+            default_max_backups: 3,
+            default_strategy: RotationStrategy::Size,
+            default_naming_style: BackupNaming::Timestamp,
+        };
+        let mut rotator = LogRotator::new(config);
+
+        fs::write(&log_path, "Everything is fine").await?;
+        assert_eq!(rotator.check_and_rotate_all().await?, 0);
+
+        fs::write(&log_path, "Something happened: Error: 500").await?;
+        assert_eq!(rotator.check_and_rotate_all().await?, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_interval_rotation_trigger() -> Result<()> {
         let dir = tempdir()?;
         let log_path = dir.path().join("interval.log");
