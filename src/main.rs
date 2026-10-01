@@ -132,14 +132,14 @@ async fn main() -> anyhow::Result<()> {
         // Try to remove existing socket before binding
         if std::path::Path::new(socket_path).exists() {
             if let Err(e) = std::fs::remove_file(socket_path) {
-                error!(error = %e, "Failed to remove existing unix socket");
+                error!(error = %e, "Failed to remove existing unix socket at {}", socket_path);
             }
         }
         
         let listener = match UnixListener::bind(socket_path) {
             Ok(l) => l,
             Err(e) => {
-                error!(error = %e, "Failed to bind unix socket");
+                error!(error = %e, "Failed to bind unix socket at {}", socket_path);
                 return;
             }
         };
@@ -170,35 +170,36 @@ async fn main() -> anyhow::Result<()> {
                             let _ = stream.write_all(status.as_bytes()).await;
                             let _ = stream.write_all(b"\n").await;
                         } else {
-                            let _ = stream.write_all(b"error: could not get status\n").await;
+                            let _ = stream.write_all(b"error: could not retrieve status from rotator\n").await;
                         }
                     } else if command == "config" {
                         if let Ok(json_config) = serde_json::to_string_pretty(&socket_config) {
                             let _ = stream.write_all(format!("\n{}\n", json_config).as_bytes()).await;
                         } else {
-                            let _ = stream.write_all(b"error: failed to serialize config\n").await;
+                            let _ = stream.write_all(b"error: failed to serialize current configuration\n").await;
                         }
                     } else if command == "stats" {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = tx_socket.send(ControlSignal::GetStats(resp_tx)).await;
                         if let Ok(stats) = resp_rx.await {
                             let _ = stream.write_all(stats.as_bytes()).await;
+                            let _ = stream.write_all(b"\n").await;
                         }
                     } else if command == "reload" {
                         info!("External reload trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::ReloadConfig).await;
-                        let _ = stream.write_all(b"reloading\n").await;
+                        let _ = stream.write_all(b"configuration reload requested\n").await;
                     } else if command == "force" {
                         info!("External force rotation trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
-                        let _ = stream.write_all(b"forcing rotation\n").await;
+                        let _ = stream.write_all(b"global rotation forced\n").await;
                     } else if command.starts_with("rotate ") {
                         let target_file = command["rotate ".len()..].trim().to_string();
                         info!(target = %target_file, "External targeted rotation trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::RotateTarget(target_file)).await;
-                        let _ = stream.write_all(b"rotating target\n").await;
+                        let _ = stream.write_all(b"targeted rotation requested\n").await;
                     } else {
-                        info!("External rotation trigger received via socket: {}", command);
+                        info!(command = %command, "External rotation trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
                         let _ = stream.write_all(b"rotating\n").await;
                     }
