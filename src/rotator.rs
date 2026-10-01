@@ -296,21 +296,20 @@ impl LogRotator {
         all_backups.sort_by_key(|&(_, created, _)| created);
 
         let mut current_total_size: u64 = all_backups.iter().map(|(_, _, size)| *size).sum();
-        let current_total_count = all_backups.len();
-
-        if current_total_size <= max_total_size && (max_total_backups.is_none() || current_total_count <= max_total_backups.unwrap()) {
-            return Ok(());
-        }
+        let mut current_total_count = all_backups.len();
 
         for (path, _, size) in all_backups {
-            let current_count = all_backups.len() - 0; // This is a simplification, we need to track actual removals
-            // In a real loop we'd track how many we've removed
-            if current_total_size <= max_total_size && (max_total_backups.is_none() || all_backups.len() <= max_total_backups.unwrap()) {
+            let size_ok = current_total_size <= max_total_size;
+            let count_ok = max_total_backups.map_or(true, |max| current_total_count <= max);
+
+            if size_ok && count_ok {
                 break;
             }
+
             debug!("Removing backup {:?} to maintain global limit", path);
             if fs::remove_file(path).await.is_ok() {
                 current_total_size -= size;
+                current_total_count -= 1;
             }
         }
         Ok(())
