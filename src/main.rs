@@ -25,8 +25,16 @@ enum ControlSignal {
 }
 
 #[derive(Serialize)]
+struct TargetStatus {
+    path: String,
+    max_size: Option<u64>,
+    strategy: String,
+}
+
+#[derive(Serialize)]
 struct StatusResponse {
     targets_count: usize,
+    targets: Vec<TargetStatus>,
     compression: bool,
     grace_period_secs: u64,
     max_age_days: u64,
@@ -232,8 +240,15 @@ async fn main() -> anyhow::Result<()> {
                         let _ = resp_tx.send(stats);
                     }
                     ControlSignal::GetStatus(resp_tx) => {
+                        let targets = rotator.config.targets.iter().map(|t| TargetStatus {
+                            path: t.log_file_path.clone(),
+                            max_size: t.max_size_bytes,
+                            strategy: format!("{:?}", t.strategy.as_ref().unwrap_or(&rotator.config.default_strategy)),
+                        }).collect();
+
                         let status_data = StatusResponse {
                             targets_count: rotator.config.targets.len(),
+                            targets,
                             compression: rotator.config.compression,
                             grace_period_secs: rotator.config.rotation_grace_period_secs,
                             max_age_days: rotator.config.max_age_days,
