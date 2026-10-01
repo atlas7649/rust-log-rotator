@@ -70,6 +70,20 @@ impl LogRotator {
         Ok(rotated_count)
     }
 
+    pub async fn rotate_specific_target(&mut self, log_file_path: &str) -> Result<()> {
+        let target = self.config.targets.iter()
+            .find(|t| t.log_file_path == log_file_path)
+            .ok_or_else(|| anyhow::anyhow!("Target file {} not found in configuration", log_file_path))?;
+
+        if self.rotate_target(target).await.is_ok() {
+            let now = chrono::Local::now();
+            self.last_rotation_dates.insert(log_file_path.to_string(), now.date_naive());
+            self.last_rotation_times.insert(log_file_path.to_string(), now);
+            info!(target = %log_file_path, "Specific target rotated successfully");
+        }
+        Ok(())
+    }
+
     async fn check_and_rotate_target(&mut self, target: &RotationTarget) -> Result<bool> {
         let path = Path::new(&target.log_file_path);
         if !path.exists() {

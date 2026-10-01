@@ -17,6 +17,7 @@ use serde::Serialize;
 #[derive(Debug)]
 enum ControlSignal {
     RotateNow,
+    RotateTarget(String),
     ReloadConfig,
     Shutdown,
     GetStats(tokio::sync::oneshot::Sender<String>),
@@ -183,6 +184,11 @@ async fn main() -> anyhow::Result<()> {
                         info!("External force rotation trigger received via socket");
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
                         let _ = stream.write_all(b"forcing rotation\n").await;
+                    } else if command.starts_with("rotate ") {
+                        let target_file = command["rotate ".len()..].trim().to_string();
+                        info!(target = %target_file, "External targeted rotation trigger received via socket");
+                        let _ = tx_socket.send(ControlSignal::RotateTarget(target_file)).await;
+                        let _ = stream.write_all(b"rotating target\n").await;
                     } else {
                         info!("External rotation trigger received via socket: {}", command);
                         let _ = tx_socket.send(ControlSignal::RotateNow).await;
@@ -203,6 +209,12 @@ async fn main() -> anyhow::Result<()> {
                             Ok(n) if n > 0 => info!(count = n, "Manual rotation successful"),
                             Ok(_) => info!("Manual rotation not needed"),
                             Err(e) => error!(error = %e, "Error during manual rotation"),
+                        }
+                    }
+                    ControlSignal::RotateTarget(target_path) => {
+                        info!(target = %target_path, "Manual targeted rotation trigger received");
+                        if let Err(e) = rotator.rotate_specific_target(&target_path).await {
+                            error!(target = %target_path, error = %e, "Error during targeted rotation");
                         }
                     }
                     ControlSignal::ReloadConfig => {
