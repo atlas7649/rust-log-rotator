@@ -125,7 +125,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Unix domain socket for external triggers
     let tx_socket = tx.clone();
-    let socket_config = config.clone();
     tokio::spawn(async move {
         let socket_path = "/tmp/rust-log-rotator.sock";
         
@@ -173,16 +172,18 @@ async fn main() -> anyhow::Result<()> {
                             let _ = stream.write_all(b"error: could not retrieve status from rotator\n").await;
                         }
                     } else if command == "config" {
-                        if let Ok(json_config) = serde_json::to_string_pretty(&socket_config) {
-                            let _ = stream.write_all(format!("\n{}\n", json_config).as_bytes()).await;
+                        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                        let _ = tx_socket.send(ControlSignal::GetStatus(resp_tx)).await;
+                        if let Ok(status_json) = resp_rx.await {
+                            let _ = stream.write_all(format!("Current status/config: {}\n", status_json).as_bytes()).await;
                         } else {
-                            let _ = stream.write_all(b"error: failed to serialize current configuration\n").await;
+                            let _ = stream.write_all(b"error: failed to retrieve configuration\n").await;
                         }
                     } else if command == "stats" {
                         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
                         let _ = tx_socket.send(ControlSignal::GetStats(resp_tx)).await;
                         if let Ok(stats) = resp_rx.await {
-                            let _ = stream.write_all(stats.as_bytes()).await;
+                            let _ = stream.write_all(format!("Operational Statistics:\n{}", stats).as_bytes()).await;
                             let _ = stream.write_all(b"\n").await;
                         }
                     } else if command == "reload" {
