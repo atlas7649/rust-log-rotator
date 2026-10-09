@@ -19,6 +19,7 @@ pub enum RotationStrategy {
 pub enum BackupNaming {
     Timestamp,
     Sequential,
+    Custom,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -120,6 +121,9 @@ impl RotationConfig {
             if target.log_file_path.is_empty() {
                 return Err(anyhow!("log_file_path cannot be empty"));
             }
+            if target.naming_style == Some(BackupNaming::Custom) && target.backup_pattern.is_none() {
+                return Err(anyhow!("backup_pattern must be specified when naming_style is Custom for target {}", target.log_file_path));
+            }
         }
         if self.check_interval_secs == 0 {
             return Err(anyhow!("check_interval_secs must be greater than 0"));
@@ -215,6 +219,17 @@ mod tests {
             backup_pattern: None,
             backup_suffix: None,
             naming_style: None,
+        }];
+        assert!(cfg.validate().is_err());
+
+        cfg.targets = vec![RotationTarget {
+            log_file_path: "test.log".to_string(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: None,
+            backup_suffix: None,
+            naming_style: Some(BackupNaming::Custom),
         }];
         assert!(cfg.validate().is_err());
     }
