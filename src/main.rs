@@ -243,7 +243,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     ControlSignal::GetStatus(resp_tx) => {
                         let targets = rotator.config.targets.iter().map(|t| TargetStatus {
-                            path: t.log_file_path.clone(),
+                            path: t.log_file_path.to_string_lossy().into_owned(),
                             max_size: t.max_size_bytes,
                             strategy: format!("{:?}", rotator.config.resolve_strategy(t)),
                         }).collect();

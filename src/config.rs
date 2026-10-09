@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use anyhow::{Context, Result, anyhow};
 use std::env;
@@ -24,7 +24,7 @@ pub enum BackupNaming {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct RotationTarget {
-    pub log_file_path: String,
+    pub log_file_path: PathBuf,
     pub max_size_bytes: Option<u64>,
     pub max_backups: Option<usize>,
     pub strategy: Option<RotationStrategy>,
@@ -56,7 +56,7 @@ impl Default for RotationConfig {
     fn default() -> Self {
         Self {
             targets: vec![RotationTarget {
-                log_file_path: "app.log".to_string(),
+                log_file_path: PathBuf::from("app.log"),
                 max_size_bytes: None,
                 max_backups: None,
                 strategy: None,
@@ -94,26 +94,29 @@ impl RotationConfig {
     }
 
     pub fn apply_env_overrides(&mut self) {
-        if let Ok(val) = env::var("LOG_ROTATOR_COMPRESSION") { 
-            self.compression = val.to_lowercase() == "true";
+        let parse_bool = |var: &str| env::var(var).map(|v| v.to_lowercase() == "true");
+        let parse_u64 = |var: &str| env::var(var).ok().and_then(|v| v.parse().ok());
+
+        if let Ok(val) = parse_bool("LOG_ROTATOR_COMPRESSION") { 
+            self.compression = val;
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_DRY_RUN") { 
-            self.dry_run = val.to_lowercase() == "true";
+        if let Ok(val) = parse_bool("LOG_ROTATOR_DRY_RUN") { 
+            self.dry_run = val;
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_INTERVAL") { 
-            if let Ok(n) = val.parse() { self.check_interval_secs = n; }
+        if let Some(n) = parse_u64("LOG_ROTATOR_INTERVAL") { 
+            self.check_interval_secs = n; 
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_MAX_AGE") { 
-            if let Ok(n) = val.parse() { self.max_age_days = n; }
+        if let Some(n) = parse_u64("LOG_ROTATOR_MAX_AGE") { 
+            self.max_age_days = n; 
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_TOTAL_SIZE") { 
-            if let Ok(n) = val.parse() { self.max_total_backup_size_bytes = Some(n); }
+        if let Some(n) = parse_u64("LOG_ROTATOR_TOTAL_SIZE") { 
+            self.max_total_backup_size_bytes = Some(n); 
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_TOTAL_COUNT") { 
-            if let Ok(n) = val.parse() { self.max_total_backups = Some(n); }
+        if let Some(n) = parse_u64("LOG_ROTATOR_TOTAL_COUNT") { 
+            self.max_total_backups = Some(n as usize); 
         }
-        if let Ok(val) = env::var("LOG_ROTATOR_GRACE_PERIOD") { 
-            if let Ok(n) = val.parse() { self.rotation_grace_period_secs = n; }
+        if let Some(n) = parse_u64("LOG_ROTATOR_GRACE_PERIOD") { 
+            self.rotation_grace_period_secs = n; 
         }
     }
 
@@ -122,11 +125,11 @@ impl RotationConfig {
             return Err(anyhow!("At least one rotation target must be specified"));
         }
         for target in &self.targets {
-            if target.log_file_path.is_empty() {
+            if target.log_file_path.as_os_str().is_empty() {
                 return Err(anyhow!("log_file_path cannot be empty"));
             }
             if target.naming_style == Some(BackupNaming::Custom) && target.backup_pattern.is_none() {
-                return Err(anyhow!("backup_pattern must be specified when naming_style is Custom for target {}", target.log_file_path));
+                return Err(anyhow!("backup_pattern must be specified when naming_style is Custom for target {:?}", target.log_file_path));
             }
         }
         if self.check_interval_secs == 0 {
@@ -166,7 +169,7 @@ mod tests {
     async fn test_default_config() {
         let cfg = RotationConfig::default();
         assert_eq!(cfg.targets.len(), 1);
-        assert_eq!(cfg.targets[0].log_file_path, "app.log");
+        assert_eq!(cfg.targets[0].log_file_path, PathBuf::from("app.log"));
         assert_eq!(cfg.default_max_backups, 5);
         assert_eq!(cfg.default_strategy, RotationStrategy::Size);
         assert_eq!(cfg.check_interval_secs, 60);
@@ -200,8 +203,8 @@ mod tests {
 
         let config = RotationConfig::load_from_file(tmp_file.path()).await?;
         assert_eq!(config.targets.len(), 2);
-        assert_eq!(config.targets[0].log_file_path, "test1.log");
-        assert_eq!(config.targets[1].log_file_path, "test2.log");
+        assert_eq!(config.targets[0].log_file_path, PathBuf::from("test1.log"));
+        assert_eq!(config.targets[1].log_file_path, PathBuf::from("test2.log"));
         assert!(config.compression);
         assert!(config.dry_run);
         assert_eq!(config.check_interval_secs, 30);
@@ -221,7 +224,7 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg.targets = vec![RotationTarget {
-            log_file_path: "".to_string(),
+            log_file_path: PathBuf::from(""),
             max_size_bytes: None,
             max_backups: None,
             strategy: None,
@@ -233,7 +236,7 @@ mod tests {
         assert!(cfg.validate().is_err());
 
         cfg.targets = vec![RotationTarget {
-            log_file_path: "test.log".to_string(),
+            log_file_path: PathBuf::from("test.log"),
             max_size_bytes: None,
             max_backups: None,
             strategy: None,
@@ -251,7 +254,7 @@ mod tests {
         cfg.default_strategy = RotationStrategy::Size;
         
         let target_with_strategy = RotationTarget {
-            log_file_path: "test.log".to_string(),
+            log_file_path: PathBuf::from("test.log"),
             max_size_bytes: Some(500),
             max_backups: Some(2),
             strategy: Some(RotationStrategy::Truncate),
@@ -268,7 +271,7 @@ mod tests {
         assert_eq!(cfg.resolve_preserve_permissions(&target_with_strategy), false);
 
         let target_default = RotationTarget {
-            log_file_path: "default.log".to_string(),
+            log_file_path: PathBuf::from("default.log"),
             max_size_bytes: None,
             max_backups: None,
             strategy: None,
