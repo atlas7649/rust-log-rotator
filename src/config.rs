@@ -31,6 +31,7 @@ pub struct RotationTarget {
     pub backup_pattern: Option<String>,
     pub backup_suffix: Option<String>,
     pub naming_style: Option<BackupNaming>,
+    pub preserve_permissions: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -48,6 +49,7 @@ pub struct RotationConfig {
     pub default_max_backups: usize,
     pub default_strategy: RotationStrategy,
     pub default_naming_style: BackupNaming,
+    pub default_preserve_permissions: bool,
 }
 
 impl Default for RotationConfig {
@@ -61,6 +63,7 @@ impl Default for RotationConfig {
                 backup_pattern: None,
                 backup_suffix: None,
                 naming_style: None,
+                preserve_permissions: None,
             }],
             compression: false,
             dry_run: false,
@@ -73,6 +76,7 @@ impl Default for RotationConfig {
             default_max_backups: 5,
             default_strategy: RotationStrategy::Size,
             default_naming_style: BackupNaming::Timestamp,
+            default_preserve_permissions: true,
         }
     }
 }
@@ -146,6 +150,10 @@ impl RotationConfig {
     pub fn resolve_naming_style(&self, target: &RotationTarget) -> &BackupNaming {
         target.naming_style.as_ref().unwrap_or(&self.default_naming_style)
     }
+
+    pub fn resolve_preserve_permissions(&self, target: &RotationTarget) -> bool {
+        target.preserve_permissions.unwrap_or(self.default_preserve_permissions)
+    }
 }
 
 #[cfg(test)]
@@ -166,6 +174,7 @@ mod tests {
         assert_eq!(cfg.max_total_backup_size_bytes, Some(100 * 1024 * 1024));
         assert_eq!(cfg.rotation_grace_period_secs, 30);
         assert_eq!(cfg.default_naming_style, BackupNaming::Timestamp);
+        assert!(cfg.default_preserve_permissions);
     }
 
     #[tokio::test]
@@ -219,6 +228,7 @@ mod tests {
             backup_pattern: None,
             backup_suffix: None,
             naming_style: None,
+            preserve_permissions: None,
         }];
         assert!(cfg.validate().is_err());
 
@@ -230,6 +240,7 @@ mod tests {
             backup_pattern: None,
             backup_suffix: None,
             naming_style: Some(BackupNaming::Custom),
+            preserve_permissions: None,
         }];
         assert!(cfg.validate().is_err());
     }
@@ -247,12 +258,14 @@ mod tests {
             backup_pattern: None,
             backup_suffix: None,
             naming_style: Some(BackupNaming::Sequential),
+            preserve_permissions: Some(false),
         };
 
         assert_eq!(cfg.resolve_strategy(&target_with_strategy), &RotationStrategy::Truncate);
         assert_eq!(cfg.resolve_max_size(&target_with_strategy), 500);
         assert_eq!(cfg.resolve_max_backups(&target_with_strategy), 2);
         assert_eq!(cfg.resolve_naming_style(&target_with_strategy), &BackupNaming::Sequential);
+        assert_eq!(cfg.resolve_preserve_permissions(&target_with_strategy), false);
 
         let target_default = RotationTarget {
             log_file_path: "default.log".to_string(),
@@ -262,11 +275,13 @@ mod tests {
             backup_pattern: None,
             backup_suffix: None,
             naming_style: None,
+            preserve_permissions: None,
         };
 
         assert_eq!(cfg.resolve_strategy(&target_default), &RotationStrategy::Size);
         assert_eq!(cfg.resolve_max_size(&target_default), cfg.default_max_size_bytes);
         assert_eq!(cfg.resolve_max_backups(&target_default), cfg.default_max_backups);
         assert_eq!(cfg.resolve_naming_style(&target_default), &BackupNaming::Timestamp);
+        assert_eq!(cfg.resolve_preserve_permissions(&target_default), cfg.default_preserve_permissions);
     }
 }
