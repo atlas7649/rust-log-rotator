@@ -245,7 +245,7 @@ async fn main() -> anyhow::Result<()> {
                         let targets = rotator.config.targets.iter().map(|t| TargetStatus {
                             path: t.log_file_path.clone(),
                             max_size: t.max_size_bytes,
-                            strategy: format!("{:?}", t.strategy.as_ref().unwrap_or(&rotator.config.default_strategy)),
+                            strategy: format!("{:?}", rotator.config.resolve_strategy(t)),
                         }).collect();
 
                         let status_data = StatusResponse {

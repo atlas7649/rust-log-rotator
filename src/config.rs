@@ -126,6 +126,22 @@ impl RotationConfig {
         }
         Ok(())
     }
+
+    pub fn resolve_strategy(&self, target: &RotationTarget) -> &RotationStrategy {
+        target.strategy.as_ref().unwrap_or(&self.default_strategy)
+    }
+
+    pub fn resolve_max_size(&self, target: &RotationTarget) -> u64 {
+        target.max_size_bytes.unwrap_or(self.default_max_size_bytes)
+    }
+
+    pub fn resolve_max_backups(&self, target: &RotationTarget) -> usize {
+        target.max_backups.unwrap_or(self.default_max_backups)
+    }
+
+    pub fn resolve_naming_style(&self, target: &RotationTarget) -> &BackupNaming {
+        target.naming_style.as_ref().unwrap_or(&self.default_naming_style)
+    }
 }
 
 #[cfg(test)]
@@ -201,5 +217,41 @@ mod tests {
             naming_style: None,
         }];
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_resolution() {
+        let mut cfg = RotationConfig::default();
+        cfg.default_strategy = RotationStrategy::Size;
+        
+        let target_with_strategy = RotationTarget {
+            log_file_path: "test.log".to_string(),
+            max_size_bytes: Some(500),
+            max_backups: Some(2),
+            strategy: Some(RotationStrategy::Truncate),
+            backup_pattern: None,
+            backup_suffix: None,
+            naming_style: Some(BackupNaming::Sequential),
+        };
+
+        assert_eq!(cfg.resolve_strategy(&target_with_strategy), &RotationStrategy::Truncate);
+        assert_eq!(cfg.resolve_max_size(&target_with_strategy), 500);
+        assert_eq!(cfg.resolve_max_backups(&target_with_strategy), 2);
+        assert_eq!(cfg.resolve_naming_style(&target_with_strategy), &BackupNaming::Sequential);
+
+        let target_default = RotationTarget {
+            log_file_path: "default.log".to_string(),
+            max_size_bytes: None,
+            max_backups: None,
+            strategy: None,
+            backup_pattern: None,
+            backup_suffix: None,
+            naming_style: None,
+        };
+
+        assert_eq!(cfg.resolve_strategy(&target_default), &RotationStrategy::Size);
+        assert_eq!(cfg.resolve_max_size(&target_default), cfg.default_max_size_bytes);
+        assert_eq!(cfg.resolve_max_backups(&target_default), cfg.default_max_backups);
+        assert_eq!(cfg.resolve_naming_style(&target_default), &BackupNaming::Timestamp);
     }
 }
