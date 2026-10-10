@@ -14,6 +14,8 @@ use tracing::{info, warn, error, Level};
 use tracing_subscriber::FmtSubscriber;
 use serde::Serialize;
 
+const VERSION: &str = "0.1.0";
+
 #[derive(Debug)]
 enum ControlSignal {
     RotateNow,
@@ -159,51 +161,58 @@ async fn main() -> anyhow::Result<()> {
                             return;
                         }
 
-                        let response = if command == "ping" {
-                            b"pong\n".to_vec()
-                        } else if command == "health" {
-                            b"ok\n".to_vec()
-                        } else if command == "status" {
-                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = tx_conn.send(ControlSignal::GetStatus(resp_tx)).await;
-                            if let Ok(status) = resp_rx.await {
-                                format!("{}\n", status).into_bytes()
-                            } else {
-                                b"error: could not retrieve status from rotator\n".to_vec()
+                        let response = match command {
+                            "ping" => b"pong\n".to_vec(),
+                            "health" => b"ok\n".to_vec(),
+                            "version" => format!("rust-log-rotator v{}\n", VERSION).into_bytes(),
+                            "status" => {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let _ = tx_conn.send(ControlSignal::GetStatus(resp_tx)).await;
+                                if let Ok(status) = resp_rx.await {
+                                    format!("{}\n", status).into_bytes()
+                                } else {
+                                    b"error: could not retrieve status from rotator\n".to_vec()
+                                }
                             }
-                        } else if command == "config" {
-                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = tx_conn.send(ControlSignal::GetStatus(resp_tx)).await;
-                            if let Ok(status_json) = resp_rx.await {
-                                format!("Current status/config: {}\n", status_json).into_bytes()
-                            } else {
-                                b"error: failed to retrieve configuration\n".to_vec()
+                            "config" => {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let _ = tx_conn.send(ControlSignal::GetStatus(resp_tx)).await;
+                                if let Ok(status_json) = resp_rx.await {
+                                    format!("Current status/config: {}\n", status_json).into_bytes()
+                                } else {
+                                    b"error: failed to retrieve configuration\n".to_vec()
+                                }
                             }
-                        } else if command == "stats" {
-                            let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-                            let _ = tx_conn.send(ControlSignal::GetStats(resp_tx)).await;
-                            if let Ok(stats) = resp_rx.await {
-                                format!("Operational Statistics:\n{}\n", stats).into_bytes()
-                            } else {
-                                b"error: failed to retrieve stats\n".to_vec()
+                            "stats" => {
+                                let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+                                let _ = tx_conn.send(ControlSignal::GetStats(resp_tx)).await;
+                                if let Ok(stats) = resp_rx.await {
+                                    format!("Operational Statistics:\n{}\n", stats).into_bytes()
+                                } else {
+                                    b"error: failed to retrieve stats\n".to_vec()
+                                }
                             }
-                        } else if command == "reload" {
-                            info!("External reload trigger received via socket");
-                            let _ = tx_conn.send(ControlSignal::ReloadConfig).await;
-                            b"configuration reload requested\n".to_vec()
-                        } else if command == "force" {
-                            info!("External force rotation trigger received via socket");
-                            let _ = tx_conn.send(ControlSignal::RotateNow).await;
-                            b"global rotation forced\n".to_vec()
-                        } else if command.starts_with("rotate ") {
-                            let target_file = command["rotate ".len()..].trim().to_string();
-                            info!(target = %target_file, "External targeted rotation trigger received via socket");
-                            let _ = tx_conn.send(ControlSignal::RotateTarget(target_file)).await;
-                            b"targeted rotation requested\n".to_vec()
-                        } else {
-                            info!(command = %command, "External rotation trigger received via socket");
-                            let _ = tx_conn.send(ControlSignal::RotateNow).await;
-                            b"rotating\n".to_vec()
+                            "reload" => {
+                                info!("External reload trigger received via socket");
+                                let _ = tx_conn.send(ControlSignal::ReloadConfig).await;
+                                b"configuration reload requested\n".to_vec()
+                            }
+                            "force" => {
+                                info!("External force rotation trigger received via socket");
+                                let _ = tx_conn.send(ControlSignal::RotateNow).await;
+                                b"global rotation forced\n".to_vec()
+                            }
+                            cmd if cmd.starts_with("rotate ") => {
+                                let target_file = cmd["rotate ".len()..].trim().to_string();
+                                info!(target = %target_file, "External targeted rotation trigger received via socket");
+                                let _ = tx_conn.send(ControlSignal::RotateTarget(target_file)).await;
+                                b"targeted rotation requested\n".to_vec()
+                            }
+                            _ => {
+                                info!(command = %command, "External rotation trigger received via socket");
+                                let _ = tx_conn.send(ControlSignal::RotateNow).await;
+                                b"rotating\n".to_vec()
+                            }
                         };
 
                         if let Err(e) = stream.write_all(&response).await {
