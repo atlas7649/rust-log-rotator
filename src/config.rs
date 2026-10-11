@@ -132,8 +132,18 @@ impl RotationConfig {
                 return Err(anyhow!("backup_pattern must be specified when naming_style is Custom for target {:?}", target.log_file_path));
             }
         }
-        if self.check_interval_secs == 0 {
-            return Err(anyhow!("check_interval_secs must be greater than 0"));
+        if self.check_interval_secs < 1 || self.check_interval_secs > 86400 {
+            return Err(anyhow!("check_interval_secs must be between 1 and 86400"));
+        }
+        if let Some(size) = self.max_total_backup_size_bytes {
+            if size == 0 {
+                return Err(anyhow!("max_total_backup_size_bytes cannot be 0"));
+            }
+        }
+        if let Some(count) = self.max_total_backups {
+            if count == 0 {
+                return Err(anyhow!("max_total_backups cannot be 0"));
+            }
         }
         Ok(())
     }
@@ -246,6 +256,12 @@ mod tests {
             preserve_permissions: None,
         }];
         assert!(cfg.validate().is_err());
+
+        let mut cfg_invalid = RotationConfig::default();
+        cfg_invalid.check_interval_secs = 0;
+        assert!(cfg_invalid.validate().is_err());
+        cfg_invalid.check_interval_secs = 90000;
+        assert!(cfg_invalid.validate().is_err());
     }
 
     #[test]

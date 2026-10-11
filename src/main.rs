@@ -44,6 +44,8 @@ struct StatusResponse {
     uptime_secs: u64,
     status: String,
     last_check_interval_secs: u64,
+    max_total_backup_size_bytes: Option<u64>,
+    max_total_backups: Option<usize>,
 }
 
 #[tokio::main]
@@ -273,6 +275,8 @@ async fn main() -> anyhow::Result<()> {
                             uptime_secs: start_time.elapsed().as_secs(),
                             status: "running".to_string(),
                             last_check_interval_secs: rotator.config.check_interval_secs,
+                            max_total_backup_size_bytes: rotator.config.max_total_backup_size_bytes,
+                            max_total_backups: rotator.config.max_total_backups,
                         };
                         let status = match serde_json::to_string(&status_data) {
                             Ok(json) => json,
