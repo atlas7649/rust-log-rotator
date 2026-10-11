@@ -46,6 +46,7 @@ struct StatusResponse {
     last_check_interval_secs: u64,
     max_total_backup_size_bytes: Option<u64>,
     max_total_backups: Option<usize>,
+    version: String,
 }
 
 #[tokio::main]
@@ -277,6 +278,7 @@ async fn main() -> anyhow::Result<()> {
                             last_check_interval_secs: rotator.config.check_interval_secs,
                             max_total_backup_size_bytes: rotator.config.max_total_backup_size_bytes,
                             max_total_backups: rotator.config.max_total_backups,
+                            version: VERSION.to_string(),
                         };
                         let status = match serde_json::to_string(&status_data) {
                             Ok(json) => json,
@@ -310,4 +312,32 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::RotationConfig;
+    use crate::rotator::LogRotator;
+
+    #[tokio::test]
+    async fn test_rotator_initialization() {
+        let config = RotationConfig::default();
+        let rotator = LogRotator::new(config);
+        assert_eq!(rotator.config.targets.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_control_signal_routing() {
+        let (tx, mut rx) = mpsc::channel::<ControlSignal>(1);
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        
+        tx.send(ControlSignal::GetStatus(resp_tx)).await.unwrap();
+        
+        if let Some(ControlSignal::GetStatus(sender)) = rx.recv().await {
+            sender.send("test_status".to_string()).unwrap();
+        }
+        
+        assert_eq!(resp_rx.await.unwrap(), "test_status");
+    }
 }
