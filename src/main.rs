@@ -154,7 +154,7 @@ async fn main() -> anyhow::Result<()> {
             if let Ok((mut stream, _)) = listener.accept().await {
                 let tx_conn = tx_socket.clone();
                 tokio::spawn(async move {
-                    let mut buf = [0u8; 1024];
+                    let mut buf = [0u8; 2048];
                     if let Ok(Ok(n)) = timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
                         if n == 0 { return; }
                         let msg = String::from_utf8_lossy(&buf[..n]);
